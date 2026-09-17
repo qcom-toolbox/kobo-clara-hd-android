@@ -56,24 +56,29 @@ mount -t functionfs -o uid=2000,gid=2000 adb /dev/usb-ffs/adb
 echo "diag: /dev/usb-ffs/adb right after mount:" >> /usb_adb_setup.log
 ls -la /dev/usb-ffs/adb >> /usb_adb_setup.log 2>&1
 
-# The real bug behind "configfs-gadget ci_hdrc.0: failed to start g1: -19":
-# f_fs.c's bind() unconditionally returns -ENODEV unless ffs_opts->dev->
-# desc_ready is true, which only becomes true once adbd has opened ep0 and
-# written its FunctionFS descriptors/strings -- so binding the UDC before
-# that happens can never work, no matter what else is configured correctly.
-# adbd may already be running (started earlier via the sys.usb.config=adb
-# property in default.prop) and stuck in its own retry/backoff loop from
-# before /dev/usb-ffs/adb/ep0 existed -- stop and restart it fresh here so
-# it opens ep0 immediately instead of waiting out a stale backoff timer.
-# ep0 is now correctly shell-owned (the uid=/gid= mount options above
-# fixed that), but ep1/ep2 still never appear, so adbd is failing either
-# the open or the descriptor write -- still unresolved.
+# Why binding the UDC has been failing with "configfs-gadget ci_hdrc.0:
+# failed to start g1: -19": f_fs.c's bind() returns -ENODEV unless
+# ffs_opts->dev->desc_ready is true, and that only becomes true once
+# something has opened ep0 and written the FunctionFS descriptors and
+# strings. So the UDC bind at the end of this script cannot succeed until
+# adbd has done that -- and so far it never has (ep1/ep2 never appeared).
 #
-# Running it under logwrapper with persist.adb.trace_mask set was an
-# attempt to capture adbd's own D() output; do NOT do that again. It spun
-# hard enough to take 27% CPU through the whole boot (visible in an ANR
-# CPU breakdown as "27% 199/logwrapper"), starving a boot that is already
-# slow and making the system markedly worse. Left as a plain service start.
+# Before handing ep0 to adbd, check whether the kernel accepts the exact
+# descriptor blob adbd sends. Must run first: f_fs permits a single ep0
+# opener, so this would get -EBUSY if adbd were already holding it. It
+# closes ep0 again immediately (which tears the function state back down),
+# so it only reports, it does not substitute for adbd.
+/ffs_probe
+
+# adbd is no longer started early by a sys.usb.config property trigger
+# (see default.prop) -- ep0 exists by now, so this start is the first one
+# and it will choose the FunctionFS transport rather than falling back to
+# the legacy /dev/android_adb device this kernel cannot provide.
+#
+# Do NOT run adbd under logwrapper with persist.adb.trace_mask set to
+# capture its D() output: that spun hard enough to take 27% CPU for an
+# entire boot (seen in an ANR CPU breakdown as "27% 199/logwrapper"),
+# starving an already slow boot.
 stop adbd
 start adbd
 

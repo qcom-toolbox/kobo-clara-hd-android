@@ -54,6 +54,36 @@ Patched to return the intent unchanged instead of throwing, matching the
 graceful degradation already used a few lines earlier for the sibling
 "attempt to launch receivers ... before boot completion" case.
 
+## Device config (`default.prop`, `init.rc`)
+
+These two live in the vendor `android_root` and are not tracked, so the
+changes made to them are recorded here.
+
+`init.rc`:
+
+- `import /init.usb.rc` added explicitly. `ro.hardware` is never set
+  anywhere in this build, so the existing
+  `import /init.${ro.hardware}.usb.rc` silently resolves to nothing and no
+  USB rules load at all.
+- Services added: `usb_adb_up` (`usb_adb_setup.sh`), `einkdumpstuck`
+  (`eink_dump_stuck.sh`), `bootlogger`, `logcatcap`.
+- `einklaunch` and `wifi_on` commented out — both forced an activity to
+  the foreground during boot, which stopped any real launcher from ever
+  being shown.
+
+`default.prop`:
+
+- `ro.secure=0`, `ro.debuggable=1`.
+- `sys.usb.config` / `persist.sys.usb.config` set to `none`, **not**
+  `adb`. Setting them to `adb` makes init.usb.rc's
+  `on property:sys.usb.config=adb` rule start adbd very early, before
+  `usb_adb_setup.sh` has mounted functionfs. adbd picks its transport once
+  at startup — FunctionFS only if `/dev/usb-ffs/adb/ep0` already exists,
+  otherwise the legacy `/dev/android_adb`, which cannot exist on this
+  kernel (no `android_usb` gadget driver; that sysfs interface was
+  replaced by configfs). Leaving it unset means `usb_adb_setup.sh` is the
+  only thing that starts adbd, after `ep0` is in place.
+
 ## `EPubProd.apk` — `EpubApplicationInitializer$1$1.run()`
 
 Spun forever waiting for `Environment.getExternalStorageState()` to become

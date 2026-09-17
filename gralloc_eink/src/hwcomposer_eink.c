@@ -1,0 +1,578 @@
+/*
+ * Custom e-ink hwcomposer: claims every real layer as HWC_OVERLAY so
+ * SurfaceFlinger's hasGlesComposition() stays false and it never calls
+ * eglSwapBuffers() on the primary display -- sidestepping a fatal bug in
+ * this vendor build's software EGL/GLES implementation (libGLES_android.so
+ * dereferences a NULL ANativeWindow inside eglSwapBuffers whenever it's
+ * actually invoked; see tombstones from surfaceflinger crashes).
+ *
+ * Composition itself is done here in plain software: each layer's pixel
+ * buffer is mapped via the gralloc module's lock()/unlock() and memcpy'd
+ * into the real framebuffer, respecting displayFrame placement. Scaling
+ * and alpha blending are not implemented (rare for this device's simple
+ * fullscreen UI); anything requesting them is still copied unscaled/opaque
+ * rather than dropped, since a visually-imperfect frame beats none at all.
+ *
+ * Buffer geometry (width/height/stride/format) isn't present in the opaque
+ * buffer_handle_t at the HWC interface level and the real vendor gralloc's
+ * private handle layout is unknown to us, so gralloc.default.so (loaded in
+ * the same process) tracks it at alloc() time and exposes it here via the
+ * exported eink_gralloc_query() function.
+ *
+ * NOTE: this is the last known-good version (screen renders correctly,
+ * boots all the way to real app UI) from before a 90-degree portrait
+ * rotation was attempted. The panel's native framebuffer is landscape
+ * (1448x1072) while the device is physically held in portrait, so the
+ * screen displays sideways with this version -- that's a known, accepted
+ * limitation for now, reverted back to after the rotation attempt caused
+ * a reproducible hard reset/reboot loop that several rounds of diagnosis
+ * (memory-safety fixes, shadow-buffer double-copy, update throttling, a
+ * post-update settle delay) did not resolve. Revisit the rotation once
+ * ADB is available for faster, non-destructive iteration.
+ */
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <errno.h>
+#include <dlfcn.h>
+#include <pthread.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <time.h>
+#include <linux/fb.h>
+#include <linux/mxcfb.h>
+
+#include <hardware/hardware.h>
+#include <hardware/gralloc.h>
+#include <hardware/hwcomposer.h>
+
+#include "cutils/log.h"
+
+#define GRALLOC_MODULE_PATH "/system/lib/hw/gralloc.default.so"
+
+typedef int (*eink_gralloc_query_fn)(buffer_handle_t handle, int *w, int *h, int *stride, int *format);
+
+typedef struct {
+	hwc_composer_device_1_t device; /* must be first */
+
+	const gralloc_module_t *gralloc;
+	eink_gralloc_query_fn query_fn;
+
+	int fb_fd;
+	void *fb_mem;
+	/* Composition writes here rather than into fb_mem directly: rotated
+	 * layers are written in a transposed (column-strided) pattern, and
+	 * fb_mem is real framebuffer/DMA memory. shadow is ordinary malloc'd
+	 * RAM with the same layout as fb_mem; hwc_set() does one sequential
+	 * bulk memcpy(fb_mem, shadow, fb_size) per frame. */
+	void *shadow;
+	size_t fb_size;
+	/* All of these are the PHYSICAL panel/framebuffer dimensions, straight
+	 * from fb0's vinfo.xres/yres (1448x1072 landscape scan order).
+	 *
+	 * Rotation is deliberately NOT done here any more. This vendor's
+	 * SurfaceFlinger takes the display size from the gralloc fb0 device,
+	 * not from our getDisplayAttributes() (confirmed: DisplayManagerService
+	 * logged "Built-in Screen": 1448 x 1072 even while we reported
+	 * 1072x1448), so WindowManager treats the panel as landscape-natural
+	 * and rotates the UI itself -- InputReader logged the matching
+	 * "orientation 3" viewport, i.e. it is already rotating touch input to
+	 * match too. SurfaceFlinger folds that display rotation into each
+	 * layer's transform field and hands us displayFrame in this physical
+	 * space. Previously we ignored transform and clipped displayFrame
+	 * against a 1072-wide "logical portrait" screen, which threw away
+	 * everything past x=1072 -- 376 unwritten pixels showing up as a black
+	 * band along one edge. Honouring transform instead fixes that and
+	 * keeps what is drawn consistent with where touches land. */
+	int width, height;
+	int fb_width, fb_height, stride_bytes, bpp;
+
+	hwc_procs_t const *procs;
+	pthread_t vsync_thread;
+	int vsync_enabled;
+	int stop_vsync;
+} eink_hwc_t;
+
+static void eink_send_update(int fd, int xres, int yres)
+{
+	struct mxcfb_update_data update;
+	memset(&update, 0, sizeof(update));
+	update.update_region.left = 0;
+	update.update_region.top = 0;
+	update.update_region.width = xres;
+	update.update_region.height = yres;
+	update.waveform_mode = WAVEFORM_MODE_AUTO;
+	update.update_mode = UPDATE_MODE_FULL;
+	update.temp = TEMP_USE_AMBIENT;
+	update.flags = 0;
+	if (ioctl(fd, MXCFB_SEND_UPDATE, &update) == -1)
+		ALOGE("hwcomposer_eink: MXCFB_SEND_UPDATE failed: %s", strerror(errno));
+}
+
+static int g_prepare_count;
+static int g_set_count;
+
+static int hwc_prepare(hwc_composer_device_1_t *dev, size_t numDisplays,
+		hwc_display_contents_1_t **displays)
+{
+	(void)dev;
+	g_prepare_count++;
+	if (g_prepare_count <= 10 || (g_prepare_count % 100) == 0) {
+		for (size_t d = 0; d < numDisplays; d++) {
+			if (displays[d])
+				ALOGI("hwcomposer_eink: prepare() #%d disp=%zu numHwLayers=%zu",
+					g_prepare_count, d, displays[d]->numHwLayers);
+		}
+	}
+	for (size_t d = 0; d < numDisplays; d++) {
+		hwc_display_contents_1_t *list = displays[d];
+		if (!list)
+			continue;
+		for (size_t i = 0; i < list->numHwLayers; i++) {
+			hwc_layer_1_t *l = &list->hwLayers[i];
+			if (l->compositionType == HWC_FRAMEBUFFER_TARGET)
+				continue;
+			if (l->compositionType == HWC_BACKGROUND)
+				continue;
+			l->compositionType = HWC_OVERLAY;
+			l->hints = 0;
+		}
+	}
+	return 0;
+}
+
+static void compose_background(eink_hwc_t *hw, hwc_layer_1_t *l)
+{
+	uint8_t r = l->backgroundColor.r, g = l->backgroundColor.g, b = l->backgroundColor.b;
+	uint8_t gray = (uint8_t)((r + g + b) / 3);
+	memset(hw->shadow, gray, hw->fb_size);
+}
+
+/* Layer buffers are NOT the framebuffer's format: SurfaceFlinger hands us
+ * 32-bit RGBX_8888/RGBA_8888 (confirmed from the alloc() log -- format=2
+ * and format=1 respectively) while this panel's framebuffer is 16-bit
+ * RGB565. Using the framebuffer's bytes-per-pixel for the source, as this
+ * compositor did originally, both halves the source row stride (so every
+ * row is read from the wrong offset) and reinterprets 32-bit pixels as
+ * 16-bit ones -- the image could never have been assembled correctly. */
+static int src_bytes_per_pixel(int format)
+{
+	switch (format) {
+	case HAL_PIXEL_FORMAT_RGBA_8888:
+	case HAL_PIXEL_FORMAT_RGBX_8888:
+	case HAL_PIXEL_FORMAT_BGRA_8888:
+		return 4;
+	case HAL_PIXEL_FORMAT_RGB_888:
+		return 3;
+	case HAL_PIXEL_FORMAT_RGB_565:
+		return 2;
+	default:
+		return 0;
+	}
+}
+
+static inline uint16_t to_rgb565(const uint8_t *p, int sbpp, int format)
+{
+	uint8_t r, g, b;
+
+	if (sbpp == 2)
+		return *(const uint16_t *)p;
+
+	if (format == HAL_PIXEL_FORMAT_BGRA_8888) {
+		b = p[0]; g = p[1]; r = p[2];
+	} else {
+		r = p[0]; g = p[1]; b = p[2];
+	}
+	return (uint16_t)(((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3));
+}
+
+static int compose_layer(eink_hwc_t *hw, hwc_layer_1_t *l)
+{
+	if (!l->handle || !hw->query_fn || !hw->gralloc)
+		return -1;
+
+	int sw = 0, sh = 0, sstride = 0, sformat = 0;
+	if (hw->query_fn(l->handle, &sw, &sh, &sstride, &sformat) != 0) {
+		ALOGE("hwcomposer_eink: no geometry for handle %p, skipping layer", (void*)l->handle);
+		return -1;
+	}
+
+	int dleft = l->displayFrame.left, dtop = l->displayFrame.top;
+	int dw = l->displayFrame.right - l->displayFrame.left;
+	int dh = l->displayFrame.bottom - l->displayFrame.top;
+	int cleft = l->sourceCropi.left, ctop = l->sourceCropi.top;
+	int cw = l->sourceCropi.right - l->sourceCropi.left;
+	int ch = l->sourceCropi.bottom - l->sourceCropi.top;
+
+	/* transform says how the layer buffer maps onto displayFrame;
+	 * SurfaceFlinger folds the whole display rotation into it. Scaling is
+	 * still unsupported -- a crop/frame size mismatch just copies 1:1 from
+	 * the crop origin. */
+	uint32_t xform = l->transform;
+
+	if (dw <= 0 || dh <= 0 || cw <= 0 || ch <= 0)
+		return -1;
+
+	void *vaddr = NULL;
+	int rc = hw->gralloc->lock((gralloc_module_t const *)hw->gralloc, l->handle,
+			GRALLOC_USAGE_SW_READ_OFTEN, cleft, ctop, cw, ch, &vaddr);
+	if (rc != 0 || !vaddr) {
+		ALOGE("hwcomposer_eink: gralloc lock failed for handle %p: rc=%d", (void*)l->handle, rc);
+		return -1;
+	}
+
+	int sbpp = src_bytes_per_pixel(sformat);
+	int dbpp = hw->bpp;
+	size_t src_row_stride = (size_t)sstride * sbpp;
+	size_t dst_row_stride = (size_t)hw->stride_bytes;
+	const uint8_t *src = (const uint8_t *)vaddr;
+
+	if (sbpp == 0 || dbpp != 2) {
+		ALOGE("hwcomposer_eink: unsupported formats (src format=%d sbpp=%d, dst bpp=%d)",
+			sformat, sbpp, dbpp);
+		hw->gralloc->unlock((gralloc_module_t const *)hw->gralloc, l->handle);
+		return -1;
+	}
+
+	/* Iterate SOURCE-major so source reads run sequentially along a row.
+	 * A rotation is a transpose, so one side of the copy has to be
+	 * strided; keeping the strided side on the destination (the shadow
+	 * buffer, plain cached RAM) is what the earlier working builds did,
+	 * and reading the source sequentially avoids a cache miss on every
+	 * single pixel. The transform only affects where a source row lands
+	 * and which way it advances, so resolve it once per row rather than
+	 * per pixel: (i0,j0) is where this row's first pixel goes and
+	 * (di,dj) is the step taken per source pixel. */
+	for (int sy = 0; sy < ch; sy++) {
+		int srcy = ctop + sy;
+		int i0, j0, di, dj, dx, dy;
+		const uint8_t *srow;
+
+		if (srcy < 0 || srcy >= sh)
+			continue;
+		srow = src + (size_t)srcy * src_row_stride;
+
+		switch (xform) {
+		case HWC_TRANSFORM_ROT_90:
+			i0 = ch - 1 - sy; j0 = 0;            di =  0; dj =  1; break;
+		case HWC_TRANSFORM_ROT_180:
+			i0 = cw - 1;      j0 = ch - 1 - sy;  di = -1; dj =  0; break;
+		case HWC_TRANSFORM_ROT_270:
+			i0 = sy;          j0 = cw - 1;       di =  0; dj = -1; break;
+		case HWC_TRANSFORM_FLIP_H:
+			i0 = cw - 1;      j0 = sy;           di = -1; dj =  0; break;
+		case HWC_TRANSFORM_FLIP_V:
+			i0 = 0;           j0 = ch - 1 - sy;  di =  1; dj =  0; break;
+		default:
+			i0 = 0;           j0 = sy;           di =  1; dj =  0; break;
+		}
+
+		dx = dleft + i0;
+		dy = dtop + j0;
+
+		for (int sx = 0; sx < cw; sx++, dx += di, dy += dj) {
+			int srcx = cleft + sx;
+
+			if (srcx < 0 || srcx >= sw)
+				continue;
+			if (dx < 0 || dx >= hw->width || dy < 0 || dy >= hw->height)
+				continue;
+
+			*(uint16_t *)((uint8_t *)hw->shadow + (size_t)dy * dst_row_stride
+					+ (size_t)dx * 2) =
+				to_rgb565(srow + (size_t)srcx * sbpp, sbpp, sformat);
+		}
+	}
+
+	hw->gralloc->unlock((gralloc_module_t const *)hw->gralloc, l->handle);
+	return 0;
+}
+
+static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
+		hwc_display_contents_1_t **displays)
+{
+	eink_hwc_t *hw = (eink_hwc_t *)dev;
+	g_set_count++;
+	int verbose = (g_set_count <= 10);
+	for (size_t d = 0; d < numDisplays; d++) {
+		hwc_display_contents_1_t *list = displays[d];
+		if (!list)
+			continue;
+		if (d != HWC_DISPLAY_PRIMARY) {
+			list->retireFenceFd = -1;
+			continue;
+		}
+		int dirty = 0, composed = 0, failed = 0;
+
+		/* Every frame recomposites the whole layer list, so start from a
+		 * known state rather than leaving whatever was here before. White,
+		 * because that is what an e-ink panel idles at -- an uninitialized
+		 * or stale buffer would leave any region no layer covers reading
+		 * as a black band. */
+		memset(hw->shadow, 0xff, hw->fb_size);
+
+		for (size_t i = 0; i < list->numHwLayers; i++) {
+			hwc_layer_1_t *l = &list->hwLayers[i];
+			l->releaseFenceFd = -1;
+			if (verbose)
+				ALOGI("hwcomposer_eink: set() #%d layer %zu type=%d transform=%d "
+					"frame=(%d,%d)-(%d,%d) crop=(%d,%d)-(%d,%d)",
+					g_set_count, i, l->compositionType, l->transform,
+					l->displayFrame.left, l->displayFrame.top,
+					l->displayFrame.right, l->displayFrame.bottom,
+					l->sourceCropi.left, l->sourceCropi.top,
+					l->sourceCropi.right, l->sourceCropi.bottom);
+			if (l->compositionType == HWC_FRAMEBUFFER_TARGET)
+				continue;
+			if (l->compositionType == HWC_BACKGROUND) {
+				compose_background(hw, l);
+				dirty = 1;
+				continue;
+			}
+			if (compose_layer(hw, l) == 0) {
+				dirty = 1;
+				composed++;
+			} else {
+				failed++;
+			}
+		}
+		if (verbose)
+			ALOGI("hwcomposer_eink: set() #%d numHwLayers=%zu composed=%d failed=%d dirty=%d",
+				g_set_count, list->numHwLayers, composed, failed, dirty);
+		if (dirty) {
+			/* Single sequential bulk copy into the real framebuffer --
+			 * see the comment on hw->shadow. This is the only place
+			 * fb_mem is ever written. */
+			memcpy(hw->fb_mem, hw->shadow, hw->fb_size);
+			eink_send_update(hw->fb_fd, hw->fb_width, hw->fb_height);
+		}
+		list->retireFenceFd = -1;
+	}
+	return 0;
+}
+
+static int hwc_eventControl(hwc_composer_device_1_t *dev, int disp, int event, int enabled)
+{
+	eink_hwc_t *hw = (eink_hwc_t *)dev;
+	ALOGI("hwcomposer_eink: eventControl(disp=%d, event=%d, enabled=%d) called", disp, event, enabled);
+	if (event != HWC_EVENT_VSYNC)
+		return -EINVAL;
+	hw->vsync_enabled = enabled;
+	return 0;
+}
+
+static int hwc_blank(hwc_composer_device_1_t *dev, int disp, int blank)
+{
+	(void)dev; (void)disp; (void)blank;
+	return 0;
+}
+
+static int hwc_query(hwc_composer_device_1_t *dev, int what, int *value)
+{
+	(void)dev;
+	switch (what) {
+	case HWC_BACKGROUND_LAYER_SUPPORTED:
+		*value = 1;
+		return 0;
+	case HWC_VSYNC_PERIOD:
+		*value = 1000000000; /* e-ink: no real vsync, 1Hz placeholder */
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
+static void hwc_registerProcs(hwc_composer_device_1_t *dev, hwc_procs_t const *procs)
+{
+	eink_hwc_t *hw = (eink_hwc_t *)dev;
+	hw->procs = procs;
+	ALOGI("hwcomposer_eink: registerProcs called, procs=%p invalidate=%p vsync=%p hotplug=%p",
+		(void*)procs, procs ? (void*)procs->invalidate : NULL,
+		procs ? (void*)procs->vsync : NULL, procs ? (void*)procs->hotplug : NULL);
+}
+
+static int hwc_getDisplayConfigs(hwc_composer_device_1_t *dev, int disp,
+		uint32_t *configs, size_t *numConfigs)
+{
+	(void)dev;
+	if (disp != HWC_DISPLAY_PRIMARY)
+		return -EINVAL;
+	if (*numConfigs == 0)
+		return 0;
+	configs[0] = 0;
+	*numConfigs = 1;
+	return 0;
+}
+
+static int hwc_getDisplayAttributes(hwc_composer_device_1_t *dev, int disp,
+		uint32_t config, const uint32_t *attributes, int32_t *values)
+{
+	eink_hwc_t *hw = (eink_hwc_t *)dev;
+	(void)config;
+	if (disp != HWC_DISPLAY_PRIMARY)
+		return -EINVAL;
+	for (int i = 0; attributes[i] != HWC_DISPLAY_NO_ATTRIBUTE; i++) {
+		switch (attributes[i]) {
+		case HWC_DISPLAY_VSYNC_PERIOD: values[i] = 1000000000; break;
+		case HWC_DISPLAY_WIDTH: values[i] = hw->width; break;
+		case HWC_DISPLAY_HEIGHT: values[i] = hw->height; break;
+		case HWC_DISPLAY_DPI_X: values[i] = 212000; break;
+		case HWC_DISPLAY_DPI_Y: values[i] = 212000; break;
+		default: values[i] = 0; break;
+		}
+	}
+	return 0;
+}
+
+static void *vsync_thread_main(void *arg)
+{
+	eink_hwc_t *hw = (eink_hwc_t *)arg;
+	struct timespec ts;
+	int tick = 0;
+	int logged_wait = 0;
+	while (!hw->stop_vsync) {
+		clock_gettime(CLOCK_MONOTONIC, &ts);
+		int64_t now_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+		usleep(66666); /* ~15Hz: plenty for an e-ink refresh cadence */
+		if (hw->vsync_enabled && hw->procs && hw->procs->vsync) {
+			hw->procs->vsync(hw->procs, HWC_DISPLAY_PRIMARY, now_ns);
+			tick++;
+			if (tick <= 5 || (tick % 150) == 0)
+				ALOGI("hwcomposer_eink: vsync thread delivered callback #%d", tick);
+		} else if (!logged_wait && (tick == 0)) {
+			/* Log once, ~2s in, if we're still waiting for eventControl/registerProcs. */
+			static int waited_ticks = 0;
+			waited_ticks++;
+			if (waited_ticks == 30) {
+				ALOGI("hwcomposer_eink: vsync thread still idle after ~2s: enabled=%d procs=%p vsync_fn=%p",
+					hw->vsync_enabled, (void*)hw->procs, hw->procs ? (void*)hw->procs->vsync : NULL);
+				logged_wait = 1;
+			}
+		}
+	}
+	return NULL;
+}
+
+static int hwc_close(struct hw_device_t *dev)
+{
+	eink_hwc_t *hw = (eink_hwc_t *)dev;
+	hw->stop_vsync = 1;
+	pthread_join(hw->vsync_thread, NULL);
+	if (hw->fb_mem && hw->fb_mem != MAP_FAILED)
+		munmap(hw->fb_mem, hw->fb_size);
+	free(hw->shadow);
+	if (hw->fb_fd >= 0)
+		close(hw->fb_fd);
+	free(hw);
+	return 0;
+}
+
+static int hwc_device_open(const hw_module_t *module, const char *name, hw_device_t **device)
+{
+	if (strcmp(name, HWC_HARDWARE_COMPOSER) != 0)
+		return -EINVAL;
+
+	ALOGI("hwcomposer_eink: device_open called");
+
+	eink_hwc_t *hw = (eink_hwc_t *)malloc(sizeof(*hw));
+	if (!hw)
+		return -ENOMEM;
+	memset(hw, 0, sizeof(*hw));
+
+	hw->fb_fd = open("/dev/graphics/fb0", O_RDWR);
+	if (hw->fb_fd < 0) {
+		ALOGE("hwcomposer_eink: open(/dev/graphics/fb0) failed: %s", strerror(errno));
+		free(hw);
+		return -ENODEV;
+	}
+
+	struct fb_var_screeninfo vinfo;
+	struct fb_fix_screeninfo finfo;
+	if (ioctl(hw->fb_fd, FBIOGET_VSCREENINFO, &vinfo) == -1 ||
+	    ioctl(hw->fb_fd, FBIOGET_FSCREENINFO, &finfo) == -1) {
+		ALOGE("hwcomposer_eink: FBIOGET_*SCREENINFO failed: %s", strerror(errno));
+		close(hw->fb_fd);
+		free(hw);
+		return -ENODEV;
+	}
+
+	/* One coordinate space now: the panel's own. Rotation belongs to
+	 * WindowManager/SurfaceFlinger, which already do it (and already
+	 * rotate touch input to match); we just honour the per-layer
+	 * transform they hand us. See the comment on width/height above. */
+	hw->fb_width = vinfo.xres;
+	hw->fb_height = vinfo.yres;
+	hw->width = vinfo.xres;
+	hw->height = vinfo.yres;
+	hw->stride_bytes = finfo.line_length;
+	hw->bpp = vinfo.bits_per_pixel / 8;
+	hw->fb_size = (size_t)finfo.line_length * vinfo.yres;
+
+	hw->fb_mem = mmap(NULL, hw->fb_size, PROT_READ | PROT_WRITE, MAP_SHARED, hw->fb_fd, 0);
+	if (hw->fb_mem == MAP_FAILED) {
+		ALOGE("hwcomposer_eink: mmap fb failed: %s", strerror(errno));
+		close(hw->fb_fd);
+		free(hw);
+		return -ENODEV;
+	}
+
+	hw->shadow = malloc(hw->fb_size);
+	if (!hw->shadow) {
+		ALOGE("hwcomposer_eink: failed to allocate %zu-byte shadow buffer", hw->fb_size);
+		munmap(hw->fb_mem, hw->fb_size);
+		close(hw->fb_fd);
+		free(hw);
+		return -ENOMEM;
+	}
+
+	void *gr_handle = dlopen(GRALLOC_MODULE_PATH, RTLD_NOW);
+	if (gr_handle) {
+		hw->gralloc = (const gralloc_module_t *)dlsym(gr_handle, HAL_MODULE_INFO_SYM_AS_STR);
+		hw->query_fn = (eink_gralloc_query_fn)dlsym(gr_handle, "eink_gralloc_query");
+	}
+	if (!hw->gralloc || !hw->query_fn) {
+		ALOGE("hwcomposer_eink: failed to bind gralloc module/query fn (gralloc=%p query_fn=%p)",
+			(void*)hw->gralloc, (void*)hw->query_fn);
+	}
+
+	ALOGI("hwcomposer_eink: fb %dx%d stride=%d bpp=%d size=%zu (no HWC-side rotation; "
+		"honouring per-layer transform instead)",
+		hw->width, hw->height, hw->stride_bytes, hw->bpp, hw->fb_size);
+
+	hw->device.common.tag = HARDWARE_DEVICE_TAG;
+	hw->device.common.version = HWC_DEVICE_API_VERSION_1_1;
+	hw->device.common.module = (hw_module_t *)module;
+	hw->device.common.close = hwc_close;
+	hw->device.prepare = hwc_prepare;
+	hw->device.set = hwc_set;
+	hw->device.eventControl = hwc_eventControl;
+	hw->device.blank = hwc_blank;
+	hw->device.query = hwc_query;
+	hw->device.registerProcs = hwc_registerProcs;
+	hw->device.getDisplayConfigs = hwc_getDisplayConfigs;
+	hw->device.getDisplayAttributes = hwc_getDisplayAttributes;
+
+	pthread_create(&hw->vsync_thread, NULL, vsync_thread_main, hw);
+
+	*device = &hw->device.common;
+	ALOGI("hwcomposer_eink: device_open succeeded, hw=%p", (void*)hw);
+	return 0;
+}
+
+static struct hw_module_methods_t hwc_module_methods = {
+	.open = hwc_device_open
+};
+
+hwc_module_t HAL_MODULE_INFO_SYM = {
+	.common = {
+		.tag = HARDWARE_MODULE_TAG,
+		.version_major = 1,
+		.version_minor = 1,
+		.id = HWC_HARDWARE_MODULE_ID,
+		.name = "E-ink software HWComposer",
+		.author = "clara-hd project",
+		.methods = &hwc_module_methods,
+	}
+};

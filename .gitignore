@@ -1,0 +1,47 @@
+# Deny-by-default.
+#
+# This working tree is not just our source: it also holds a full Linux
+# kernel tree, U-Boot, the Android NDK, ~8 GB raw SD-card images and
+# extracted Kobo/Tolino vendor firmware. None of that belongs in a repo,
+# so nothing is tracked unless explicitly listed here.
+#
+# Note there is deliberately no "!*/" rule: without it git never descends
+# into kobo-kernel/, tolino-fw/system/ and friends at all. Each directory
+# on a wanted path has to be un-ignored individually, which is exactly the
+# property we want. Our kernel changes live as copies under patches/kernel
+# rather than being tracked in place inside the GPL tree.
+*
+
+!.gitignore
+!README.md
+!ROADMAP.md
+!ROADMAP_v2.md
+
+# Framework + kernel patches, and the NTX image tool.
+!patches/
+!patches/**
+
+# Our e-ink gralloc wrapper, hwcomposer, and the native debug probes.
+!gralloc_eink/
+!gralloc_eink/src/
+!gralloc_eink/src/*.c
+!gralloc_eink/src/*.h
+
+# Boot-time scripts we add to the device's android_root.
+!tolino-fw/
+!tolino-fw/android_root/
+!tolino-fw/android_root/*.sh
+
+# Belt and braces: never publish binaries or images even if a rule above
+# would otherwise match them.
+*.img
+*.bin
+*.so
+*.o
+*.ko
+*.apk
+*.jar
+*.dex
+*.odex
+*.zip
+*.log

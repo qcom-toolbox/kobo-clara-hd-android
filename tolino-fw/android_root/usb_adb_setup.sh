@@ -44,6 +44,11 @@ echo 500 > /config/usb_gadget/g1/configs/c.1/MaxPower
 ln -s /config/usb_gadget/g1/functions/ffs.adb /config/usb_gadget/g1/configs/c.1/ffs.adb
 
 mkdir -p /dev/usb-ffs/adb
+# adbd drops to uid shell *before* it checks whether ep0 exists, and falls
+# back to TCP port 5555 if it can't see it (its trace log showed exactly
+# that: "transport: local server init", no USB). mkdir here inherits a
+# restrictive umask, so make the path traversable explicitly.
+chmod 0755 /dev/usb-ffs /dev/usb-ffs/adb
 # adbd runs as uid/gid "shell" (2000), but a plain functionfs mount creates
 # ep0 as root:root mode 0600 -- adbd's own open() on ep0 then fails
 # permission checks and it can never write descriptors (confirmed: adbd
@@ -55,6 +60,7 @@ mount -t functionfs -o uid=2000,gid=2000 adb /dev/usb-ffs/adb
 
 echo "diag: /dev/usb-ffs/adb right after mount:" >> /usb_adb_setup.log
 ls -la /dev/usb-ffs/adb >> /usb_adb_setup.log 2>&1
+ls -ld /dev/usb-ffs /dev/usb-ffs/adb >> /usb_adb_setup.log 2>&1
 
 # Why binding the UDC has been failing with "configfs-gadget ci_hdrc.0:
 # failed to start g1: -19": f_fs.c's bind() returns -ENODEV unless
@@ -93,11 +99,20 @@ for p in $(ps | grep adbd | while read -r u pid rest; do echo $pid; done); do
 done
 getprop | grep -iE "adb|usb|secure|debuggable" >> /usb_adb_setup.log 2>&1
 
-# No `head` binary in this shell environment (same gap hit earlier with
-# `awk`) -- there's only ever one UDC on this SoC, so just take the whole
-# (single-line) `ls` output directly instead.
+# Bind the gadget to the UDC once adbd has written its descriptors (ep1
+# appears), and again whenever it comes unbound: f_fs unbinds the gadget
+# when ep0 is closed, e.g. if adbd restarts. No `head` binary in this
+# shell, but there's only one UDC on this SoC, so take the whole `ls`.
+set +x
 UDC_NAME=$(ls /sys/class/udc/)
-echo "$UDC_NAME" > /config/usb_gadget/g1/UDC
-
-echo "adb gadget setup done, UDC=$UDC_NAME" >> /usb_adb_setup.log
-sync
+while true; do
+	if [ -e /dev/usb-ffs/adb/ep1 ] &&
+	   [ -z "$(cat /config/usb_gadget/g1/UDC)" ]; then
+		echo "$UDC_NAME" > /config/usb_gadget/g1/UDC
+		echo "bound UDC=$UDC_NAME: $(cat /config/usb_gadget/g1/UDC)" \
+			>> /usb_adb_setup.log
+		ls -la /dev/usb-ffs/adb >> /usb_adb_setup.log 2>&1
+		sync
+	fi
+	sleep 5
+done

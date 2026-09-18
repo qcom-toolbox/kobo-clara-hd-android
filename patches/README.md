@@ -79,6 +79,10 @@ changes made to them are recorded here.
   the foreground during boot, which stopped any real launcher from ever
   being shown.
 
+- `ro.adb.secure` set to `0` instead of `1`. Key approval is answered by
+  UsbDeviceManager's USB-debugging prompt, which only runs with "USB
+  debugging" on in Settings, and that stays off here (see below).
+
 `default.prop`:
 
 - `ro.secure=0`, `ro.debuggable=1`.

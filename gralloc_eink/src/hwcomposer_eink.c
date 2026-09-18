@@ -294,8 +294,24 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 		hwc_display_contents_1_t **displays)
 {
 	eink_hwc_t *hw = (eink_hwc_t *)dev;
+	/* Log the full layer list for the first few frames and again whenever
+	 * the layer count changes, capped so a busy UI cannot flood the SD
+	 * card. The first frames alone are all boot animation; the status
+	 * bar, nav bar and launcher only show up much later as a change in
+	 * the layer set, which is exactly what this catches. */
+	static size_t last_num_layers;
+	static int layer_set_logs;
+	size_t num_primary = (numDisplays > 0 && displays[0]) ? displays[0]->numHwLayers : 0;
+	int verbose;
+
 	g_set_count++;
-	int verbose = (g_set_count <= 10);
+	verbose = g_set_count <= 10 ||
+		(num_primary != last_num_layers && layer_set_logs < 40);
+	if (num_primary != last_num_layers) {
+		last_num_layers = num_primary;
+		if (g_set_count > 10)
+			layer_set_logs++;
+	}
 	for (size_t d = 0; d < numDisplays; d++) {
 		hwc_display_contents_1_t *list = displays[d];
 		if (!list)
@@ -316,14 +332,21 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 		for (size_t i = 0; i < list->numHwLayers; i++) {
 			hwc_layer_1_t *l = &list->hwLayers[i];
 			l->releaseFenceFd = -1;
-			if (verbose)
+			if (verbose) {
+				int qw = 0, qh = 0, qs = 0, qf = -1;
+
+				if (l->handle && hw->query_fn)
+					hw->query_fn(l->handle, &qw, &qh, &qs, &qf);
 				ALOGI("hwcomposer_eink: set() #%d layer %zu type=%d transform=%d "
+					"blending=0x%x format=%d buf=%dx%d "
 					"frame=(%d,%d)-(%d,%d) crop=(%d,%d)-(%d,%d)",
 					g_set_count, i, l->compositionType, l->transform,
+					l->blending, qf, qw, qh,
 					l->displayFrame.left, l->displayFrame.top,
 					l->displayFrame.right, l->displayFrame.bottom,
 					l->sourceCropi.left, l->sourceCropi.top,
 					l->sourceCropi.right, l->sourceCropi.bottom);
+			}
 			if (l->compositionType == HWC_FRAMEBUFFER_TARGET)
 				continue;
 			if (l->compositionType == HWC_BACKGROUND) {

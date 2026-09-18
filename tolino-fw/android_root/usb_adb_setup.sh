@@ -58,39 +58,40 @@ ls -la /dev/usb-ffs/adb >> /usb_adb_setup.log 2>&1
 
 # Why binding the UDC has been failing with "configfs-gadget ci_hdrc.0:
 # failed to start g1: -19": f_fs.c's bind() returns -ENODEV unless
-# ffs_opts->dev->desc_ready is true, and that only becomes true once
 # something has opened ep0 and written the FunctionFS descriptors and
-# strings. So the UDC bind at the end of this script cannot succeed until
-# adbd has done that -- and so far it never has (ep1/ep2 never appeared).
+# strings. /ffs_probe (run here on an earlier boot) proved the kernel
+# accepts the exact descriptor blob adbd embeds, so the problem is on
+# adbd's side: on the last boot it was not even running 5 s after
+# "start adbd". The probe is no longer run, so adbd is the first and only
+# ep0 opener.
 #
-# Before handing ep0 to adbd, check whether the kernel accepts the exact
-# descriptor blob adbd sends. Must run first: f_fs permits a single ep0
-# opener, so this would get -EBUSY if adbd were already holding it. It
-# closes ep0 again immediately (which tears the function state back down),
-# so it only reports, it does not substitute for adbd.
-/ffs_probe
+# adbd's own trace log goes to /data/adb/adb-<time>-<pid> when
+# persist.adb.trace_mask is set, which is how to see why it exits.
+# (Do NOT capture it via logwrapper instead: that spun at 27% CPU for a
+# whole boot.)
+mkdir -p /data/adb
+chmod 0777 /data/adb
+setprop persist.adb.trace_mask 0xffff
 
-# adbd is no longer started early by a sys.usb.config property trigger
-# (see default.prop) -- ep0 exists by now, so this start is the first one
-# and it will choose the FunctionFS transport rather than falling back to
-# the legacy /dev/android_adb device this kernel cannot provide.
-#
-# Do NOT run adbd under logwrapper with persist.adb.trace_mask set to
-# capture its D() output: that spun hard enough to take 27% CPU for an
-# entire boot (seen in an ANR CPU breakdown as "27% 199/logwrapper"),
-# starving an already slow boot.
-stop adbd
 start adbd
 
-# Give adbd time to actually open ep0 and write descriptors (near-instant
-# once ep0 exists, but leave real margin rather than guessing tightly).
-sleep 5
-
-echo "diag: is adbd running?" >> /usb_adb_setup.log
-ps | grep adbd >> /usb_adb_setup.log 2>&1
-echo "diag: /dev/usb-ffs/adb after adbd start (ep1/ep2 should exist if" \
-	"adbd wrote descriptors successfully):" >> /usb_adb_setup.log
-ls -la /dev/usb-ffs/adb >> /usb_adb_setup.log 2>&1
+# Timeline: init's own view of the service (running / restarting /
+# stopped), the process, the endpoint files and the usb config property.
+for t in 1 2 3 4 5 6 7 8; do
+	sleep 2
+	echo "diag t=$((t*2))s init.svc.adbd=$(getprop init.svc.adbd)" \
+		"sys.usb.config=$(getprop sys.usb.config)" >> /usb_adb_setup.log
+	ps | grep adbd >> /usb_adb_setup.log 2>&1
+	ls -la /dev/usb-ffs/adb >> /usb_adb_setup.log 2>&1
+done
+for p in $(ps | grep adbd | while read -r u pid rest; do echo $pid; done); do
+	echo "diag: adbd pid $p" >> /usb_adb_setup.log
+	cat /proc/$p/status >> /usb_adb_setup.log 2>&1
+	ls -l /proc/$p/fd >> /usb_adb_setup.log 2>&1
+	cat /proc/$p/wchan >> /usb_adb_setup.log 2>&1
+	echo >> /usb_adb_setup.log
+done
+getprop | grep -iE "adb|usb|secure|debuggable" >> /usb_adb_setup.log 2>&1
 
 # No `head` binary in this shell environment (same gap hit earlier with
 # `awk`) -- there's only ever one UDC on this SoC, so just take the whole

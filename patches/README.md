@@ -65,8 +65,16 @@ changes made to them are recorded here.
   anywhere in this build, so the existing
   `import /init.${ro.hardware}.usb.rc` silently resolves to nothing and no
   USB rules load at all.
-- Services added: `usb_adb_up` (`usb_adb_setup.sh`), `einkdumpstuck`
-  (`eink_dump_stuck.sh`), `bootlogger`, `logcatcap`.
+- Services added: `usb_adb_up` (`usb_adb_setup.sh`), `uidiag`
+  (`ui_diag.sh`), `bootlogger`, `logcatcap`.
+- Bring-up instrumentation removed again: the binder
+  `debug_mask 65535` write, zygote's `LD_PRELOAD /binder_trace_shim.so`,
+  and the `einkdumpstuck` (SIGQUITs system_server on every scan),
+  `bprobe_delayed`, `fbtest` and `svcmgrprobe` services. The binder
+  mask alone logged every transaction to the kernel log (~100k lines per
+  boot), which kept the CPU at ~84% kernel time, made each binder call
+  take 150-380 ms, and got SystemUI ANR-killed before it could add the
+  navigation bar.
 - `einklaunch` and `wifi_on` commented out — both forced an activity to
   the foreground during boot, which stopped any real launcher from ever
   being shown.

@@ -1,3 +1,65 @@
+diff --git a/src/Common/SharedLibrary.cpp b/src/Common/SharedLibrary.cpp
+index 982292d7c..6502767b5 100644
+--- a/src/Common/SharedLibrary.cpp
++++ b/src/Common/SharedLibrary.cpp
+@@ -14,6 +14,9 @@
+ 
+ #include "SharedLibrary.hpp"
+ 
++#include <cstdio>
++#include <cstring>
++
+ #if defined(_WIN32)
+ std::string getModuleDirectory()
+ {
+@@ -42,6 +45,31 @@ std::string getModuleDirectory()
+ 	if(dladdr(&dummy_symbol, &dl_info) != 0)
+ 	{
+ 		std::string directory(dl_info.dli_fname);
++#if defined(__ANDROID__)
++		// The KitKat linker reports only the basename in dli_fname, which
++		// would make sibling libraries (libGLESv2_swiftshader.so, loaded by
++		// libEGL) be searched on the default path, which excludes
++		// /system/lib/egl. Recover the full path from /proc/self/maps.
++		if(directory.find('/') == std::string::npos)
++		{
++			FILE *maps = fopen("/proc/self/maps", "r");
++			char line[512];
++			std::string suffix = "/" + directory;
++			while(maps && fgets(line, sizeof(line), maps))
++			{
++				char *path = strchr(line, '/');
++				if(!path) continue;
++				path[strcspn(path, "\n")] = 0;
++				std::string p(path);
++				if(p.size() > suffix.size() && p.compare(p.size() - suffix.size(), suffix.size(), suffix) == 0)
++				{
++					directory = p;
++					break;
++				}
++			}
++			if(maps) fclose(maps);
++		}
++#endif
+ 		return directory.substr(0, directory.find_last_of("\\/") + 1).c_str();
+ 	}
+ 	else
+diff --git a/src/OpenGL/libEGL/Display.cpp b/src/OpenGL/libEGL/Display.cpp
+index 99503eadd..c79c12b8f 100644
+--- a/src/OpenGL/libEGL/Display.cpp
++++ b/src/OpenGL/libEGL/Display.cpp
+@@ -783,6 +783,11 @@ sw::Format Display::getDisplayFormat() const
+ 		case 16: return sw::FORMAT_R5G6B5;
+ 		default: UNREACHABLE(bpp);   // Unexpected display mode color depth
+ 		}
++	#elif defined(__ANDROID__) && ANDROID_PLATFORM_SDK_VERSION == 19 && !defined(ANDROID_NDK_BUILD)
++		// Kobo (KitKat, HWC 1.1): SurfaceFlinger always renders the client
++		// target as RGBA_8888 and asks for EGL_FRAMEBUFFER_TARGET_ANDROID on
++		// that visual, whatever fb0 is (RGB565 here; the HWC converts).
++		return sw::FORMAT_A8B8G8R8;
+ 	#elif defined(__ANDROID__)
+ 	#if !defined(ANDROID_NDK_BUILD)
+ 		static const char *const framebuffer[] =
 diff --git a/src/Reactor/SubzeroReactor.cpp b/src/Reactor/SubzeroReactor.cpp
 index 91feb6574..658928c32 100644
 --- a/src/Reactor/SubzeroReactor.cpp

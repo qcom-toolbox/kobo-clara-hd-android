@@ -92,6 +92,22 @@ changes made to them are recorded here.
   replaced by configfs). Leaving it unset means `usb_adb_setup.sh` is the
   only thing that starts adbd, after `ep0` is in place.
 
+## `SystemUI.apk` — `PhoneStatusBar.makeStatusBarView()`
+
+Tolino replaced the stock nav bar decision. AOSP creates the nav bar when
+`IWindowManager.hasNavigationBar()` is true (here forced on by
+`qemu.hw.mainkeys=0`); the vendor build calls it, discards the result, and
+instead shows the bar only if `KeyCharacterMap.deviceHasKey()` reports
+neither HOME nor BACK. The Clara's key layouts declare both, so the nav bar
+was never created. Patched back to the stock behaviour: use
+`hasNavigationBar()`'s result (excerpt in `systemui/`).
+
+Patched in the APK's own `classes.dex`, not the odex: the odex is stale
+anyway (services.jar changed), and baksmali only decodes it cleanly with
+`-a 19`. `SystemUI.odex` is deleted so Dalvik re-optimizes the patched
+dex. Re-signing is not needed: for system-image packages `PackageParser`
+only verifies the certificate on `AndroidManifest.xml`.
+
 ## `EPubProd.apk` — `EpubApplicationInitializer$1$1.run()`
 
 Spun forever waiting for `Environment.getExternalStorageState()` to become

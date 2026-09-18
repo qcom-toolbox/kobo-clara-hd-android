@@ -1,0 +1,181 @@
+diff --git a/src/Reactor/SubzeroReactor.cpp b/src/Reactor/SubzeroReactor.cpp
+index 91feb6574..658928c32 100644
+--- a/src/Reactor/SubzeroReactor.cpp
++++ b/src/Reactor/SubzeroReactor.cpp
+@@ -156,6 +156,98 @@ namespace
+ 	const bool emulateMismatchedBitCast = CPUID::ARM;
+ }
+ 
++
++#if defined(__arm__)
++// Runtime helpers for JIT code on ARM cores without hardware divide (the
++// Kobo's Cortex-A9). Subzero lowers these operations to calls by name; the
++// ELF loader below resolves the names through this table. Subzero emits
++// hard-float calls while Android armeabi-v7a C code is soft-float, so every
++// helper that passes floats/vectors is declared aapcs-vfp. Function pointers
++// keep the Thumb bit, which the MOVW/MOVT relocation preserves, so the
++// generated BLX switches to Thumb correctly.
++#include <cstring>
++#include <cmath>
++#include <android/log.h>
++namespace
++{
++	#define SZ_HARDFP __attribute__((pcs("aapcs-vfp")))
++	typedef float sz_v4f __attribute__((vector_size(16)));
++	typedef uint32_t sz_v4u __attribute__((vector_size(16)));
++
++	int32_t sz_divsi3(int32_t a, int32_t b) { return a / b; }
++	uint32_t sz_udivsi3(uint32_t a, uint32_t b) { return a / b; }
++	int32_t sz_modsi3(int32_t a, int32_t b) { return a % b; }
++	uint32_t sz_umodsi3(uint32_t a, uint32_t b) { return a % b; }
++	int64_t sz_divdi3(int64_t a, int64_t b) { return a / b; }
++	uint64_t sz_udivdi3(uint64_t a, uint64_t b) { return a / b; }
++	int64_t sz_moddi3(int64_t a, int64_t b) { return a % b; }
++	uint64_t sz_umoddi3(uint64_t a, uint64_t b) { return a % b; }
++	int32_t sz_popcountsi2(uint32_t a) { return __builtin_popcount(a); }
++	int32_t sz_popcountdi2(uint64_t a) { return __builtin_popcountll(a); }
++
++	SZ_HARDFP float sz_fmodf(float a, float b) { return fmodf(a, b); }
++	SZ_HARDFP double sz_fmod(double a, double b) { return fmod(a, b); }
++	SZ_HARDFP int64_t sz_fptosi_f32_i64(float a) { return (int64_t)a; }
++	SZ_HARDFP int64_t sz_fptosi_f64_i64(double a) { return (int64_t)a; }
++	SZ_HARDFP uint32_t sz_fptoui_f32_i32(float a) { return (uint32_t)a; }
++	SZ_HARDFP uint64_t sz_fptoui_f32_i64(float a) { return (uint64_t)a; }
++	SZ_HARDFP uint32_t sz_fptoui_f64_i32(double a) { return (uint32_t)a; }
++	SZ_HARDFP uint64_t sz_fptoui_f64_i64(double a) { return (uint64_t)a; }
++	SZ_HARDFP float sz_sitofp_i64_f32(int64_t a) { return (float)a; }
++	SZ_HARDFP double sz_sitofp_i64_f64(int64_t a) { return (double)a; }
++	SZ_HARDFP float sz_uitofp_i32_f32(uint32_t a) { return (float)a; }
++	SZ_HARDFP double sz_uitofp_i32_f64(uint32_t a) { return (double)a; }
++	SZ_HARDFP float sz_uitofp_i64_f32(uint64_t a) { return (float)a; }
++	SZ_HARDFP double sz_uitofp_i64_f64(uint64_t a) { return (double)a; }
++	SZ_HARDFP sz_v4u sz_fptoui_4xi32_f32(sz_v4f a)
++	{
++		sz_v4u r;
++		for(int i = 0; i < 4; i++) r[i] = (uint32_t)a[i];
++		return r;
++	}
++	SZ_HARDFP sz_v4f sz_uitofp_4xi32_4xf32(sz_v4u a)
++	{
++		sz_v4f r;
++		for(int i = 0; i < 4; i++) r[i] = (float)a[i];
++		return r;
++	}
++
++	void *sz_resolveExternal(const char *name)
++	{
++		static const struct { const char *name; void *fn; } table[] =
++		{
++			{"__divsi3", (void*)sz_divsi3}, {"__udivsi3", (void*)sz_udivsi3},
++			{"__modsi3", (void*)sz_modsi3}, {"__umodsi3", (void*)sz_umodsi3},
++			{"__divdi3", (void*)sz_divdi3}, {"__udivdi3", (void*)sz_udivdi3},
++			{"__moddi3", (void*)sz_moddi3}, {"__umoddi3", (void*)sz_umoddi3},
++			{"__popcountsi2", (void*)sz_popcountsi2}, {"__popcountdi2", (void*)sz_popcountdi2},
++			{"fmodf", (void*)sz_fmodf}, {"fmod", (void*)sz_fmod},
++			{"memcpy", (void*)memcpy}, {"memmove", (void*)memmove}, {"memset", (void*)memset},
++			{"__Sz_fptosi_f32_i64", (void*)sz_fptosi_f32_i64},
++			{"__Sz_fptosi_f64_i64", (void*)sz_fptosi_f64_i64},
++			{"__Sz_fptoui_f32_i32", (void*)sz_fptoui_f32_i32},
++			{"__Sz_fptoui_f32_i64", (void*)sz_fptoui_f32_i64},
++			{"__Sz_fptoui_f64_i32", (void*)sz_fptoui_f64_i32},
++			{"__Sz_fptoui_f64_i64", (void*)sz_fptoui_f64_i64},
++			{"__Sz_sitofp_i64_f32", (void*)sz_sitofp_i64_f32},
++			{"__Sz_sitofp_i64_f64", (void*)sz_sitofp_i64_f64},
++			{"__Sz_uitofp_i32_f32", (void*)sz_uitofp_i32_f32},
++			{"__Sz_uitofp_i32_f64", (void*)sz_uitofp_i32_f64},
++			{"__Sz_uitofp_i64_f32", (void*)sz_uitofp_i64_f32},
++			{"__Sz_uitofp_i64_f64", (void*)sz_uitofp_i64_f64},
++			{"__Sz_fptoui_4xi32_f32", (void*)sz_fptoui_4xi32_f32},
++			{"__Sz_uitofp_4xi32_4xf32", (void*)sz_uitofp_4xi32_4xf32},
++		};
++		for(const auto &e : table)
++		{
++			if(strcmp(e.name, name) == 0) return e.fn;
++		}
++		__android_log_print(ANDROID_LOG_ERROR, "swiftshader", "JIT: unresolved external symbol '%s'", name);
++		return nullptr;
++	}
++}
++#endif  // defined(__arm__)
++
+ namespace rr
+ {
+ 	const Capabilities Caps =
+@@ -271,6 +363,15 @@ namespace rr
+ 				const SectionHeader *target = elfSection(elfHeader, symbol.st_shndx);
+ 				symbolValue = reinterpret_cast<void*>((intptr_t)elfHeader + symbol.st_value + target->sh_offset);
+ 			}
++#if defined(__arm__)
++			else if(section == SHN_UNDEF)
++			{
++				const SectionHeader *stringTable = elfSection(elfHeader, symbolTable->sh_link);
++				const char *name = (const char*)elfHeader + stringTable->sh_offset + symbol.st_name;
++				symbolValue = sz_resolveExternal(name);
++				if(!symbolValue) return nullptr;
++			}
++#endif
+ 			else
+ 			{
+ 				return nullptr;
+@@ -562,7 +663,9 @@ namespace rr
+ 
+ 		#if defined(__arm__)
+ 			Flags.setTargetArch(Ice::Target_ARM32);
+-			Flags.setTargetInstructionSet(Ice::ARM32InstructionSet_HWDivArm);
++			// Neon without HWDivArm: Cortex-A9 (Kobo Clara HD) has no
++			// SDIV/UDIV; divisions go through sz_resolveExternal helpers.
++			Flags.setTargetInstructionSet(Ice::ARM32InstructionSet_Neon);
+ 		#elif defined(__mips__)
+ 			Flags.setTargetArch(Ice::Target_MIPS32);
+ 			Flags.setTargetInstructionSet(Ice::BaseInstructionSet);
+diff --git a/third_party/llvm-subzero/build/Android/include/llvm/Config/config.h b/third_party/llvm-subzero/build/Android/include/llvm/Config/config.h
+index 1b5d976e2..991dfb518 100644
+--- a/third_party/llvm-subzero/build/Android/include/llvm/Config/config.h
++++ b/third_party/llvm-subzero/build/Android/include/llvm/Config/config.h
+@@ -154,7 +154,7 @@
+ /* #undef HAVE_NDIR_H */
+ 
+ /* Define to 1 if you have the `posix_fallocate' function. */
+-#define HAVE_POSIX_FALLOCATE 1
++/* #undef HAVE_POSIX_FALLOCATE: not in bionic before API 21 */
+ 
+ /* Define to 1 if you have the `posix_spawn' function. */
+ /* #undef HAVE_POSIX_SPAWN */
+diff --git a/third_party/subzero/src/IceDefs.h b/third_party/subzero/src/IceDefs.h
+index 3e6519a5f..db290e973 100644
+--- a/third_party/subzero/src/IceDefs.h
++++ b/third_party/subzero/src/IceDefs.h
+@@ -295,6 +295,13 @@ enum { MaxCacheLineSize = 64 };
+ // list to be aligned to the next cache line.
+ #if defined(_MSC_VER)
+ #define ICE_CACHELINE_BOUNDARY __declspec(align(MaxCacheLineSize)) int : 0;
++#elif defined(__ANDROID__) && defined(__arm__)
++// Kobo/KitKat: bionic malloc (and pre-C++17 operator new) only guarantees
++// 8-byte alignment, but these over-aligned members make the compiler emit
++// 128-bit-aligned NEON stores into heap objects -> SIGBUS (BUS_ADRALN).
++// The padding only avoids false sharing between cores; the target is
++// single-core, so drop it.
++#define ICE_CACHELINE_BOUNDARY int : 0
+ #else // !defined(_MSC_VER)
+ // Note: zero is added to work around the following GCC 4.8 bug (fixed in 4.9):
+ //       https://gcc.gnu.org/bugzilla/show_bug.cgi?id=55382
+diff --git a/third_party/subzero/src/IceTargetLoweringARM32.cpp b/third_party/subzero/src/IceTargetLoweringARM32.cpp
+index d820bcabe..984680732 100644
+--- a/third_party/subzero/src/IceTargetLoweringARM32.cpp
++++ b/third_party/subzero/src/IceTargetLoweringARM32.cpp
+@@ -3819,9 +3819,12 @@ void TargetARM32::lowerCall(const InstCall *Instr) {
+   // Allow ConstantRelocatable to be left alone as a direct call, but force
+   // other constants like ConstantInteger32 to be in a register and make it an
+   // indirect call.
+-  if (!llvm::isa<ConstantRelocatable>(CallTarget)) {
+-    CallTarget = legalize(CallTarget, Legal_Reg);
+-  }
++  //
++  // SwiftShader on Android (Kobo): direct BL calls need an R_ARM_CALL fixup
++  // that the Reactor's JIT loader cannot apply -- the helpers live in the
++  // shared library, far outside BL's +-32MB range from JIT memory. Always
++  // go through a register (MOVW/MOVT absolute fixups + BLX).
++  CallTarget = legalize(CallTarget, Legal_Reg);
+ 
+   // Copy arguments to be passed in registers to the appropriate registers.
+   CfgVector<Variable *> RegArgs;

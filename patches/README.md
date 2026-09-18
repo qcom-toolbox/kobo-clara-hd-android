@@ -124,6 +124,41 @@ certificate on `AndroidManifest.xml`.
 
 Their `.odex` files are deleted so Dalvik optimizes the APKs' own dex.
 
+## OpenGL ES 2.0: SwiftShader (`/system/lib/egl`)
+
+The i.MX6SLL has no GPU, and Android's built-in `libGLES_android.so` only
+implements GLES 1.x, so any app asking for a GLES 2.0 config crashed
+(CPU-Z: `IllegalArgumentException: No configs match configSpec`).
+SwiftShader's legacy GLES/EGL implementation is built for the KitKat EGL
+loader (`patches/swiftshader/`: `build.sh`, `CMakeLists.txt`, source patch,
+`sstest.c` offscreen smoke test). Fixes needed for this CPU/OS:
+
+- Subzero `ICE_CACHELINE_BOUNDARY` padding dropped: bionic `malloc` is only
+  8-byte aligned, and the over-aligned members produced 128-bit-aligned
+  NEON stores into heap objects (SIGBUS `BUS_ADRALN`).
+- JIT target `ARM32InstructionSet_Neon` instead of `HWDivArm`: the
+  Cortex-A9 has no `SDIV`/`UDIV` (SIGILL in JIT code).
+- The Reactor's ELF loader resolves Subzero's runtime helpers
+  (`__divsi3`, `fmodf`, `__Sz_*` conversions, ...) to C implementations
+  (float/vector ones `aapcs-vfp`, since Subzero emits hard-float calls and
+  armeabi-v7a is soft-float), and Subzero always calls through a register
+  (`MOVW/MOVT` + `BLX`) because the loader cannot apply `R_ARM_CALL` and the
+  helpers are out of `BL` range anyway.
+- `llvm-subzero` Android config: no `posix_fallocate` before API 21.
+
+The 4.4 loader searches `/system/lib/egl` for `libEGL_*`/`libGLESv1_CM_*`/
+`libGLESv2_*`, so `libGLES_android.so` is moved to
+`/system/lib/egl_android_disabled/` (move it back to revert).
+
+`framework.jar`: `HardwareRenderer.isAvailable()` returns false (and
+`framework.odex` is deleted so the change is used). With a GLES 2.0 driver
+present every app would otherwise render its UI through HWUI on the CPU.
+
+`/system/xbin/su` (`gralloc_eink/src/su.c`): owner root, group shell, mode
+4750 (set with `debugfs` after `mke2fs`), so only the adb shell can use it.
+This adbd never runs as root, and this makes it possible to swap the EGL
+driver back without reflashing.
+
 ## `EPubProd.apk` — `EpubApplicationInitializer$1$1.run()`
 
 Spun forever waiting for `Environment.getExternalStorageState()` to become

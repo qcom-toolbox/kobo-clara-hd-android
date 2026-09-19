@@ -1,0 +1,11 @@
+diff --git a/Makefile b/Makefile
+index a08d1f6..e0b83fc 100644
+--- a/Makefile
++++ b/Makefile
+@@ -2367,5 +2367,5 @@ clean:
+ endif
+ 
+ # For compatibility with kernels prior to 2.6.24.
+-EXTRA_CFLAGS += $(ccflags-y)
++# (Kobo 4.1 kbuild: Makefile.lib already folds EXTRA_CFLAGS into ccflags-y; copying back is circular)
+ EXTRA_LDFLAGS += $(ldflags-y)

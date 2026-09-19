@@ -172,6 +172,30 @@ of `/system` in this image): see `swiftshader/device/` for the
 enable/revert scripts (`su -c` takes a single argument, so each is wrapped
 in a one-line script).
 
+## WiFi (RTL8189FS)
+
+The vendor `/system/wifi/8189fs.ko` targets Tolino's 3.0.35 kernel. It is
+replaced by the open-source `rtl8189fs` driver built against this 4.1.15
+tree (`patches/wifi/`: `build.sh`, and a one-line Makefile patch: its
+`EXTRA_CFLAGS += $(ccflags-y)` makes kbuild's variables circular on 4.1).
+It loads with the vendor HAL's leftover Broadcom module arguments, which
+4.1 ignores with a warning.
+
+`init.rc` (untracked, see above):
+
+- `on boot`: `insmod /system/lib/modules/sdio_wifi_pwr.ko` (built in the
+  kernel tree, `CONFIG_SDIO_WIFI_PWR=m`). It calls Kobo's
+  `ntx_wifi_power_ctrl(1)`, which drives the power/reset GPIOs from the
+  DT's `wifi_regulator` node and triggers the usdhc3 card-detect so the
+  chip enumerates.
+- `service wpa_supplicant`: copied from `init.freescale.rc`, which is never
+  imported (`ro.hardware` is unset), with `class main`. `dhcpcd_wlan0` was
+  already defined. No `android.hardware.wifi.direct` feature is declared,
+  so Android uses this service rather than `p2p_supplicant`.
+
+The IPv6 privacy-extension error from netd on enable is harmless (no IPv6
+sysctls for `wlan0` in this kernel config).
+
 ## `EPubProd.apk` — `EpubApplicationInitializer$1$1.run()`
 
 Spun forever waiting for `Environment.getExternalStorageState()` to become

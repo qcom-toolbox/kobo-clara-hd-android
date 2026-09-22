@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Deliberately plain and high-contrast: this is drawn on an e-ink panel
+     with no animations, so large hit targets and few redraws matter more
+     than styling. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#ffffffff"
+    android:padding="32dp">
+
+    <TextView
+        android:id="@+id/value"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="72sp"
+        android:textColor="#ff000000"
+        android:gravity="center"
+        android:paddingBottom="24dp"
+        android:text="0%" />
+
+    <SeekBar
+        android:id="@+id/seek"
+        android:layout_width="match_parent"
+        android:layout_height="80dp"
+        android:max="255"
+        android:paddingLeft="8dp"
+        android:paddingRight="8dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingTop="32dp">
+
+        <Button android:id="@+id/off" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="96dp" android:textSize="28sp" android:text="@string/off" />
+        <Button android:id="@+id/minus" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="96dp" android:textSize="28sp" android:text="@string/minus" />
+        <Button android:id="@+id/plus" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="96dp" android:textSize="28sp" android:text="@string/plus" />
+        <Button android:id="@+id/max" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="96dp" android:textSize="28sp" android:text="@string/max" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingTop="16dp">
+
+        <Button android:id="@+id/p25" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="96dp" android:textSize="28sp" android:text="25%" />
+        <Button android:id="@+id/p50" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="96dp" android:textSize="28sp" android:text="50%" />
+        <Button android:id="@+id/p75" android:layout_width="0dp" android:layout_weight="1"
+            android:layout_height="96dp" android:textSize="28sp" android:text="75%" />
+    </LinearLayout>
+</LinearLayout>

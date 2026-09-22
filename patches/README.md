@@ -220,6 +220,17 @@ pins `window_animation_scale`, `transition_animation_scale` and
 and latency, and the settings live in `/data`, so this re-applies them
 after a wipe.
 
+## Front Light app (`/system/app/FrontLight.apk`)
+
+The vendor's brightness control is a pop-up slider that dismisses itself
+immediately, which is unusable on e-ink. `apps/frontlight/` is a small
+preloaded app (source + `build.sh`) with a persistent screen: a slider,
++/- steps and 0/25/50/75/100% presets, writing
+`Settings.System.SCREEN_BRIGHTNESS` (PowerManagerService observes it and
+drives the LM3630A through the lights HAL) and forcing manual brightness
+mode. Built with SDK API 19 + build-tools r28, signed v1-only (KitKat has
+no APK Signature Scheme v2) with a local keystore that is not tracked.
+
 ## `EPubProd.apk` — `EpubApplicationInitializer$1$1.run()`
 
 Spun forever waiting for `Environment.getExternalStorageState()` to become

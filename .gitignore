@@ -32,6 +32,18 @@
 !tolino-fw/android_root/
 !tolino-fw/android_root/*.sh
 
+# The preloaded Front Light app (source only: no build output, no keystore).
+!apps/
+!apps/frontlight/
+!apps/frontlight/AndroidManifest.xml
+!apps/frontlight/build.sh
+!apps/frontlight/src/
+!apps/frontlight/src/**
+!apps/frontlight/res/
+!apps/frontlight/res/**
+apps/frontlight/build/
+*.keystore
+
 # Belt and braces: never publish binaries or images even if a rule above
 # would otherwise match them.
 *.img

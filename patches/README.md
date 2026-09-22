@@ -220,6 +220,38 @@ pins `window_animation_scale`, `transition_animation_scale` and
 and latency, and the settings live in `/data`, so this re-applies them
 after a wipe.
 
+## External storage: the missing 4th partition
+
+`fstab.E60K00` maps Android's *primary* external storage to the boot SD
+card's 4th partition
+(`...mmc_host/mmc0 auto vfat defaults voldmanaged=sdcard1:4,noemulatedsd`),
+and framework-res's `storage_list.xml` marks `/storage/sdcard1` as
+`primary`, non-removable. Our image only had 3 partitions, so vold had
+nothing to mount, `Environment.getExternalStorageState()` never became
+`mounted`, and anything touching external storage failed — the stock
+Browser crashes on launch with
+`SecurityException: Invalid mkdirs path: /mnt/media_rw/sdcard1/...`, and
+the vendor EPub app's "waiting for internal storage to be mounted" spin
+(see below) was the same cause.
+
+`patches/sdcard/add_p4.py <image> <card sectors>` adds the entry (FAT32
+LBA, starting at sector 15491072, the first 2048-aligned sector after p3).
+Flashing only writes the first ~7.4 GB, so the partition has to be
+formatted once on the host afterwards:
+`sudo mkfs.vfat -F 32 -n KOBO /dev/sdX4`.
+
+## Preloaded apps (`/system/app`)
+
+- `FrontLight.apk` — see below.
+- `Browser.apk` — the stock AOSP 4.4.2 browser from Google's
+  `armeabi-v7a-19_r05` image (the vendor build shipped none; it uses the
+  vendor's own `webviewchromium`).
+- `GhostCommander.apk` — Ghost Commander 1.60.4b5 (F-Droid archive), the
+  last release with `minSdkVersion 19`.
+- `ShatteredPixelDungeon.apk` — 0.7.2d (F-Droid archive, `minSdk 8`,
+  armeabi): a real libGDX/GLES 2.0 game, and the end-to-end test that
+  SwiftShader actually runs games on this hardware.
+
 ## Front Light app (`/system/app/FrontLight.apk`)
 
 The vendor's brightness control is a pop-up slider that dismisses itself

@@ -61,10 +61,11 @@ changes made to them are recorded here.
 
 `init.rc`:
 
-- `import /init.usb.rc` added explicitly. `ro.hardware` is never set
-  anywhere in this build, so the existing
-  `import /init.${ro.hardware}.usb.rc` silently resolves to nothing and no
-  USB rules load at all.
+- `import /init.usb.rc` added explicitly. (Correction to an earlier note
+  here: `ro.hardware` *is* set, to `E60K00`, so `init.E60K00.rc` and
+  `init.E60K00.usb.rc` are imported. The explicit import is harmless and
+  the board file's USB rules are no-ops on this kernel anyway, since they
+  drive the `android_usb` sysfs interface that configfs replaced.)
 - Services added: `usb_adb_up` (`usb_adb_setup.sh`), `uidiag`
   (`ui_diag.sh`), `bootlogger`, `logcatcap`.
 - Bring-up instrumentation removed again: the binder
@@ -188,13 +189,36 @@ It loads with the vendor HAL's leftover Broadcom module arguments, which
   `ntx_wifi_power_ctrl(1)`, which drives the power/reset GPIOs from the
   DT's `wifi_regulator` node and triggers the usdhc3 card-detect so the
   chip enumerates.
-- `service wpa_supplicant`: copied from `init.freescale.rc`, which is never
-  imported (`ro.hardware` is unset), with `class main`. `dhcpcd_wlan0` was
+- `service wpa_supplicant`: copied from `init.freescale.rc` (not imported;
+  `ro.hardware` is `E60K00`, and `init.E60K00.rc` has it commented out),
+  with `class main`. `dhcpcd_wlan0` was
   already defined. No `android.hardware.wifi.direct` feature is declared,
   so Android uses this service rather than `p2p_supplicant`.
 
 The IPv6 privacy-extension error from netd on enable is harmless (no IPv6
 sysctls for `wlan0` in this kernel config).
+
+## Front light (brightness) and animations
+
+`init.E60K00.rc` (imported, `ro.hardware=E60K00`) pointed the lights HAL at
+`mxc_msp430_fl.0`, the MSP430 companion of other NTX boards, which does not
+exist on the Clara HD — so the brightness slider moved but nothing happened
+(`E/lights: can not open file .../brightness`). The front light is the
+LM3630A's **bank B**: `/sys/class/backlight/lm3630a_ledb` (bank A is
+unused; `lm3630a_led` is Kobo's 0-100 wrapper). Changed there:
+
+- `setprop hw.backlight.dev "lm3630a_ledb"` (the vendor HAL reads this and
+  writes `/sys/class/backlight/<dev>/brightness`; `max_brightness` is 255,
+  matching Android's range 1:1).
+- `chown system system` + `chmod 0660` on that `brightness` and `bl_power`
+  (the HAL runs inside system_server, the sysfs files are root-owned).
+
+`init.rc` also gets a `noanim` oneshot service running
+`/system/bin/disable_anim.sh`, which waits for `sys.boot_completed` and
+pins `window_animation_scale`, `transition_animation_scale` and
+`animator_duration_scale` to 0. On e-ink the animations only add ghosting
+and latency, and the settings live in `/data`, so this re-applies them
+after a wipe.
 
 ## `EPubProd.apk` — `EpubApplicationInitializer$1$1.run()`
 

@@ -22,6 +22,13 @@ reproduces the image from a user's own firmware copy.
 | Sleep | the power button sleeps the device and it wakes again |
 | Wallpapers | vendor had removed the service; compositor ignored alpha (2.46) |
 
+**Photosensitive epilepsy:** the hwcomposer sends a full-panel
+`MXCFB_SEND_UPDATE` (`UPDATE_MODE_FULL`, `WAVEFORM_MODE_AUTO`) for every
+frame, so the display flashes black/white at the UI's frame rate whenever
+anything moves. Partial updates and per-window waveform modes are the fix and
+are not implemented; until then this port is not safe for photosensitive
+users, and that warning is carried in `README.md` and `build/INPUTS.md`.
+
 Still open: the vendor's stock reader app is removed rather than adapted;
 screenshots via SurfaceFlinger's GLES path are unverified; how much power
 sleep actually saves has not been measured.

@@ -4,6 +4,18 @@ The build needs two things this repository cannot ship, plus one number.
 Both come from software you are entitled to have: Tolino's own public
 firmware download, and an image of **your own** Kobo's SD card.
 
+> ## ⚠️ Photosensitive epilepsy warning
+>
+> This port refreshes the whole e-ink panel on **every** frame, which the
+> panel does as a full black/white inversion flash. Anything that redraws
+> continuously — scrolling, a game, video — therefore produces rapid
+> full-screen flashing, at up to the UI's frame rate.
+>
+> If you are photosensitive or prone to seizures, do not use this port. The
+> stock Kobo firmware does not behave this way; this is a consequence of the
+> unfinished display work here (partial updates and per-window waveform modes
+> are not implemented), not of the hardware.
+
 Before starting, be clear about what this is: an unofficial port. It runs
 from a **separate SD card**; your Kobo's original card, with its books and
 stock firmware, stays untouched as long as you follow the card instructions
@@ -125,6 +137,9 @@ Put that card in the Kobo and power on.
 
 ## What to expect on first boot
 
+- **The screen flashes.** Every frame is a full-panel refresh, so the display
+  inverts black/white constantly while anything on screen is moving. See the
+  warning at the top of this page.
 - **It is slow.** Android re-optimizes the patched framework once; the first
   boot can take several minutes with the screen apparently doing nothing.
   Later boots are much quicker.

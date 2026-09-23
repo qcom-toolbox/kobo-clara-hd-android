@@ -4,6 +4,18 @@ Porting Android 4.4.2 (KitKat) to a Kobo Clara HD e-reader — i.MX6SLL,
 1448x1072 e-ink panel, no GPU. Boots from SD card, leaving the stock
 firmware on internal storage untouched.
 
+> ## ⚠️ Photosensitive epilepsy warning
+>
+> This port refreshes the whole e-ink panel on **every** frame, which the
+> panel does as a full black/white inversion flash. Anything that redraws
+> continuously — scrolling, a game, video — therefore produces rapid
+> full-screen flashing, at up to the UI's frame rate.
+>
+> If you are photosensitive or prone to seizures, do not use this port. The
+> stock Kobo firmware does not behave this way; this is a consequence of the
+> unfinished display work here (partial updates and per-window waveform modes
+> are not implemented), not of the hardware.
+
 **Current state: usable.** Boots to the stock AOSP launcher with a working
 navigation and status bar, touch, adb over USB, WiFi, front light control,
 external storage, wallpapers, and OpenGL ES 2.0 on the CPU — enough for a
@@ -119,7 +131,8 @@ diff.
 
 This is an unofficial port with no warranty of any kind. It runs from a
 separate SD card and does not touch the Kobo's internal storage, but you are
-modifying your own device at your own risk.
+modifying your own device at your own risk. Note the photosensitive epilepsy
+warning at the top: the panel flashes on every frame.
 
 ## SD card layout
 

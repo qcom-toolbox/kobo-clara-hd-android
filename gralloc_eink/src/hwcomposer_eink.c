@@ -91,20 +91,63 @@ typedef struct {
 
 	hwc_procs_t const *procs;
 	pthread_t vsync_thread;
-	int vsync_enabled;
+	volatile int vsync_enabled;
 	int stop_vsync;
 } eink_hwc_t;
 
-static void eink_send_update(int fd, int xres, int yres)
+/*
+ * The rate SurfaceFlinger schedules the display at, and the rate the vsync
+ * thread ticks at -- they must agree. They did not: the attribute said one
+ * second (SurfaceFlinger duly reported "refresh-rate: 1.000000 fps") while
+ * the thread ticked every 66 ms, so SurfaceFlinger's timing model never
+ * settled and it stopped compositing altogether. An app rendering
+ * continuously then filled its buffer queue and blocked, and only an app
+ * switch -- which forces a transaction -- let a single frame through.
+ *
+ * 100 ms is about what this panel can actually show: a full EPDC update
+ * takes a few hundred ms, so scheduling faster only queues work in the
+ * driver.
+ */
+#define EINK_VSYNC_PERIOD_NS 100000000L   /* 10 Hz */
+
+/*
+ * How often a full (flashing) update is forced to clear accumulated
+ * ghosting. Every update used to be UPDATE_MODE_FULL over the whole panel,
+ * which is the black/white inversion flash: tolerable when the screen
+ * changed once in a while, unbearable once anything animates.
+ */
+#define EINK_FULL_UPDATE_EVERY 60
+
+/*
+ * Push a region of the framebuffer to the panel.
+ *
+ * UPDATE_MODE_PARTIAL redraws without the inversion flash, which is what
+ * should happen for nearly every frame; the periodic UPDATE_MODE_FULL is
+ * what keeps ghosting from building up. The region is the part that
+ * actually changed, so a game redrawing its window does not repaint the
+ * status and navigation bars along with it.
+ */
+static void eink_send_update(int fd, int left, int top, int width, int height,
+		int full)
 {
 	struct mxcfb_update_data update;
+
+	if (width <= 0 || height <= 0)
+		return;
+
+	/* The EPDC wants x/width on 8-pixel boundaries; grow the region
+	 * outwards rather than handing the driver something it has to round
+	 * for us. */
+	left &= ~7;
+	width = (width + 7) & ~7;
+
 	memset(&update, 0, sizeof(update));
-	update.update_region.left = 0;
-	update.update_region.top = 0;
-	update.update_region.width = xres;
-	update.update_region.height = yres;
+	update.update_region.left = left;
+	update.update_region.top = top;
+	update.update_region.width = width;
+	update.update_region.height = height;
 	update.waveform_mode = WAVEFORM_MODE_AUTO;
-	update.update_mode = UPDATE_MODE_FULL;
+	update.update_mode = full ? UPDATE_MODE_FULL : UPDATE_MODE_PARTIAL;
 	update.temp = TEMP_USE_AMBIENT;
 	update.flags = 0;
 	if (ioctl(fd, MXCFB_SEND_UPDATE, &update) == -1)
@@ -409,6 +452,9 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 			continue;
 		}
 		int dirty = 0, composed = 0, failed = 0;
+		/* Union of what this frame actually touches, in panel
+		 * coordinates, so the update can be a partial one. */
+		int dx0 = hw->width, dy0 = hw->height, dx1 = 0, dy1 = 0;
 
 		/* Every frame recomposites the whole layer list, so start from a
 		 * known state rather than leaving whatever was here before. White,
@@ -440,11 +486,18 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 			if (l->compositionType == HWC_BACKGROUND) {
 				compose_background(hw, l);
 				dirty = 1;
+				dx0 = 0; dy0 = 0; dx1 = hw->width; dy1 = hw->height;
 				continue;
 			}
 			if (compose_layer(hw, l) == 0) {
+				const hwc_rect_t *f = &l->displayFrame;
+
 				dirty = 1;
 				composed++;
+				if (f->left   < dx0) dx0 = f->left;
+				if (f->top    < dy0) dy0 = f->top;
+				if (f->right  > dx1) dx1 = f->right;
+				if (f->bottom > dy1) dy1 = f->bottom;
 			} else {
 				failed++;
 			}
@@ -453,11 +506,31 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 			ALOGI("hwcomposer_eink: set() #%d numHwLayers=%zu composed=%d failed=%d dirty=%d",
 				g_set_count, list->numHwLayers, composed, failed, dirty);
 		if (dirty) {
+			static int updates;
+			int full;
+
 			/* Single sequential bulk copy into the real framebuffer --
 			 * see the comment on hw->shadow. This is the only place
 			 * fb_mem is ever written. */
 			memcpy(hw->fb_mem, hw->shadow, hw->fb_size);
-			eink_send_update(hw->fb_fd, hw->fb_width, hw->fb_height);
+
+			if (dx0 < 0) dx0 = 0;
+			if (dy0 < 0) dy0 = 0;
+			if (dx1 > hw->width)  dx1 = hw->width;
+			if (dy1 > hw->height) dy1 = hw->height;
+			if (dx1 <= dx0 || dy1 <= dy0) {
+				dx0 = 0; dy0 = 0; dx1 = hw->width; dy1 = hw->height;
+			}
+
+			/* The shadow is cleared to white and recomposed every
+			 * frame, so anything the update leaves out keeps its old
+			 * contents on the panel; a periodic full update also
+			 * clears the ghosting partial updates leave behind. */
+			full = (++updates % EINK_FULL_UPDATE_EVERY) == 0;
+			if (full) {
+				dx0 = 0; dy0 = 0; dx1 = hw->width; dy1 = hw->height;
+			}
+			eink_send_update(hw->fb_fd, dx0, dy0, dx1 - dx0, dy1 - dy0, full);
 		}
 		list->retireFenceFd = -1;
 	}
@@ -526,7 +599,7 @@ static int hwc_getDisplayAttributes(hwc_composer_device_1_t *dev, int disp,
 		return -EINVAL;
 	for (int i = 0; attributes[i] != HWC_DISPLAY_NO_ATTRIBUTE; i++) {
 		switch (attributes[i]) {
-		case HWC_DISPLAY_VSYNC_PERIOD: values[i] = 1000000000; break;
+		case HWC_DISPLAY_VSYNC_PERIOD: values[i] = EINK_VSYNC_PERIOD_NS; break;
 		case HWC_DISPLAY_WIDTH: values[i] = hw->width; break;
 		case HWC_DISPLAY_HEIGHT: values[i] = hw->height; break;
 		case HWC_DISPLAY_DPI_X: values[i] = 212000; break;
@@ -544,9 +617,11 @@ static void *vsync_thread_main(void *arg)
 	int tick = 0;
 	int logged_wait = 0;
 	while (!hw->stop_vsync) {
+		usleep(EINK_VSYNC_PERIOD_NS / 1000);
+		/* Timestamp the event when it is delivered, not a period earlier:
+		 * SurfaceFlinger builds its model out of these. */
 		clock_gettime(CLOCK_MONOTONIC, &ts);
 		int64_t now_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-		usleep(66666); /* ~15Hz: plenty for an e-ink refresh cadence */
 		if (hw->vsync_enabled && hw->procs && hw->procs->vsync) {
 			hw->procs->vsync(hw->procs, HWC_DISPLAY_PRIMARY, now_ns);
 			tick++;

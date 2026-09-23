@@ -6,15 +6,17 @@ firmware download, and an image of **your own** Kobo's SD card.
 
 > ## ⚠️ Photosensitive epilepsy warning
 >
-> This port refreshes the whole e-ink panel on **every** frame, which the
-> panel does as a full black/white inversion flash. Anything that redraws
-> continuously — scrolling, a game, video — therefore produces rapid
-> full-screen flashing, at up to the UI's frame rate.
+> This port refreshes the e-ink panel far more aggressively than the stock
+> firmware does. Only the changed rectangle is redrawn now, but a full-panel
+> refresh — which the panel performs as a black/white inversion flash — still
+> happens regularly to clear ghosting, and anything that redraws continuously
+> (scrolling, a game, video) drives partial refreshes at the UI's frame rate.
+> Expect visible flashing.
 >
 > If you are photosensitive or prone to seizures, do not use this port. The
 > stock Kobo firmware does not behave this way; this is a consequence of the
-> unfinished display work here (partial updates and per-window waveform modes
-> are not implemented), not of the hardware.
+> unfinished display work here (per-window waveform modes are still not
+> implemented), not of the hardware.
 
 Before starting, be clear about what this is: an unofficial port. It runs
 from a **separate SD card**; your Kobo's original card, with its books and

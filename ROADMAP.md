@@ -21,13 +21,16 @@ reproduces the image from a user's own firmware copy.
 | Battery | level and charging state report correctly through the ricoh619 PMIC |
 | Sleep | the power button sleeps the device and it wakes again |
 | Wallpapers | vendor had removed the service; compositor ignored alpha (2.46) |
+| Games / GLES apps | `ro.opengles.version` and the null `queryIntentServices` (2.50) |
 
-**Photosensitive epilepsy:** the hwcomposer sends a full-panel
-`MXCFB_SEND_UPDATE` (`UPDATE_MODE_FULL`, `WAVEFORM_MODE_AUTO`) for every
-frame, so the display flashes black/white at the UI's frame rate whenever
-anything moves. Partial updates and per-window waveform modes are the fix and
-are not implemented; until then this port is not safe for photosensitive
-users, and that warning is carried in `README.md` and `build/INPUTS.md`.
+**Photosensitive epilepsy:** the hwcomposer now sends `UPDATE_MODE_PARTIAL`
+for the rectangle it composed, with a full-panel `UPDATE_MODE_FULL` every 60th
+update to clear ghosting (2.49), so the whole screen no longer inverts on
+every frame. It still flashes: the periodic full refresh is a black/white
+inversion, and anything animating drives partial refreshes at the UI's frame
+rate. Per-window waveform modes are the remaining fix and are not
+implemented; until then this port is not safe for photosensitive users, and
+that warning is carried in `README.md` and `build/INPUTS.md`.
 
 Still open: the vendor's stock reader app is removed rather than adapted;
 screenshots via SurfaceFlinger's GLES path are unverified; how much power
@@ -2044,6 +2047,82 @@ caught two real bugs in the recorded patches — one captured with stray
 annotation lines, one with duplicated labels — that would have produced a
 corrupt framework. The automated result now matches the jar running on the
 device instruction for instruction.
+
+## 2.48 A reboot under load: the OOM killer eats the watchdog
+
+Geekbench 3 rebooted the device mid-run. Not a crash: memory ran out (2.7 MB
+free, no swap), Android's lowmemorykiller had nothing left to reclaim, and the
+kernel's own OOM killer went after init's helpers — including `watchdogd`,
+the only process petting the i.MX2 hardware watchdog. Sixty seconds later the
+SoC reset itself, exactly as designed.
+
+```
+Out of memory: Kill process 71 (watchdogd) score 0 or sacrifice child
+watchdog watchdog0: watchdog did not stop!
+```
+
+It chose daemons because **every process carried the same `oom_score_adj`**
+(-941, inherited from zygote): a 200 MB benchmark looked no more killable than
+a 500 kB daemon. system_server can only write those files for processes
+sharing its uid — the proc file is owned by the app's uid, mainline lets only
+the owner write it, and system_server has `CAP_SYS_RESOURCE` but not
+`CAP_DAC_OVERRIDE`. AOSP kernels carry the permission change that makes this
+work; Kobo's does not.
+
+Both halves are in `patches/`: `kernel/proc-base.c` gates `oom_adj` /
+`oom_score_adj` writes on `CAP_SYS_RESOURCE` *or* a matching uid (what AOSP
+grants, nothing more), and `device/oom_protect.sh` pins `watchdogd`,
+`healthd`, `ueventd`, `servicemanager_new` and `vold` to `OOM_SCORE_ADJ_MIN`
+as a guard. With the guard alone the device already survives the benchmark —
+it kills an app instead of resetting.
+
+## 2.49 Display: a vsync that ticks, and updates that are not full-panel
+
+Two problems with one cause — the composer was written to get a picture on
+screen and never told SurfaceFlinger anything about *when*.
+
+slither.io drew one frame and froze; pressing home and returning produced
+exactly one more. The composer reported no `HWC_DISPLAY_VSYNC_PERIOD` and
+never delivered a vsync callback, so SurfaceFlinger's DispSync had no clock
+and only composited when something else woke it. It now reports 10 Hz — an
+honest number for this panel — and its thread delivers the callback at that
+rate while vsync is enabled.
+
+That made the second problem obvious: every `set()` sent a full-panel
+`UPDATE_MODE_FULL`, i.e. a black/white inversion flash, now at a steady rate.
+`hwc_set()` now unions the `displayFrame`s of the layers it actually composed
+and sends `UPDATE_MODE_PARTIAL` for that rectangle (rounded out to the EPDC's
+8-pixel x/width alignment), with a full refresh every 60th update to clear
+accumulated ghosting. The epilepsy warning stays — a periodic full inversion
+is still a flash — but a clock or a cursor no longer refreshes the whole
+screen.
+
+## 2.50 Games: two things that had nothing to do with the renderer
+
+SwiftShader was working; Hill Climb Racing still would not run.
+
+First it died at startup with a `NullPointerException` in Play billing's
+`IabHelper.startSetup()`. AOSP 4.4's `PackageManagerService.queryIntentServices()`
+returns **null**, not an empty list, when the intent names a package that is
+not installed (`com.android.vending` here); later platform versions return an
+empty list, which is what every Play-services client assumes. Patched, along
+with `queryIntentContentProviders()`, to return an empty list — those apps now
+take their "billing unavailable" path.
+
+Then it exited saying the device did not support OpenGL ES 2.0, while
+SurfaceFlinger was reporting `OpenGL ES 3.0 SwiftShader`. Apps do not probe
+the driver; they ask the framework, and
+`ActivityManager.getDeviceConfigurationInfo().reqGlEsVersion` is nothing but
+the `ro.opengles.version` property. The vendor set it for the Shine 3's GPU;
+the Clara HD's `build.prop` has no such line, so the framework reported no
+GLES at all. Declaring `131072` (2.0, the level apps gate on) fixed it: the
+game loads the SwiftShader EGL libs, reports `Displayed … +3s772ms`, and
+stays running.
+
+The lesson for the rest of the app catalogue is that "software renderer is
+missing features" was the wrong diagnosis twice in a row — both failures were
+the framework answering questions about hardware honestly for a device it was
+never told about.
 
 ## 3. Open risk register
 

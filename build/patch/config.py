@@ -74,13 +74,21 @@ def build_prop():
     text = read(p)
     if 'qemu.hw.mainkeys' not in text:
         text = text.rstrip('\n') + '\n\n# Force the on-screen navigation bar (no hardware keys on this device).\nqemu.hw.mainkeys=0\n'
+    if 'ro.opengles.version' not in text:
+        text = text.rstrip('\n') + ('\n\n# SwiftShader provides GLES 2.0 (it advertises 3.0; 2.0 is the level apps\n'
+                 '# actually gate on). Without this property\n'
+                 '# ActivityManager.getDeviceConfigurationInfo() reports no GLES at all and\n'
+                 '# apps refuse to start ("your device does not support OpenGL ES 2.0").\n'
+                 '# The vendor firmware set it for the GPU the Shine 3 has and this one\n'
+                 '# does not.\n'
+                 'ro.opengles.version=131072\n')
     if 'hw.backlight.dev' not in text:
         text += ('\n# Front light: LM3630A bank B drives the Clara HD front light (bank A is\n'
                  '# unused). The vendor lights HAL reads this property and writes\n'
                  '# /sys/class/backlight/<dev>/brightness (max_brightness 255 = Android range).\n'
                  'hw.backlight.dev=lm3630a_ledb\n')
     write(p, text)
-    print('  + build.prop: qemu.hw.mainkeys=0, hw.backlight.dev=lm3630a_ledb')
+    print('  + build.prop: qemu.hw.mainkeys=0, hw.backlight.dev=lm3630a_ledb,\n            ro.opengles.version=131072')
 
 
 def init_rc():

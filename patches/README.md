@@ -60,6 +60,23 @@ Patched to return the intent unchanged instead of throwing, matching the
 graceful degradation already used a few lines earlier for the sibling
 "attempt to launch receivers ... before boot completion" case.
 
+## `services.jar` — `PackageManagerService.queryIntent*()`
+
+`queryIntentServices()` and `queryIntentContentProviders()` return **null**
+in AOSP 4.4 when the intent names a package that is not installed; later
+platform versions return an empty list. Play billing and Play services
+clients make exactly that query for `com.android.vending`, which is not on
+this device, and then use the result without a null check:
+
+```
+java.lang.NullPointerException
+    at com.fingersoft.billing.util.IabHelper.startSetup(IabHelper.java:269)
+```
+
+Both methods now return an empty list (`patches/framework/
+PackageManagerService.queryIntent.patched-methods.smali`), so those apps take
+their "billing unavailable" path instead of dying at startup.
+
 ## Device config (`default.prop`, `init.rc`)
 
 These two live in the vendor `android_root` and are not tracked, so the
@@ -164,6 +181,16 @@ loader (`patches/swiftshader/`: `build.sh`, `CMakeLists.txt`, source patch,
 The 4.4 loader searches `/system/lib/egl` for `libEGL_*`/`libGLESv1_CM_*`/
 `libGLESv2_*`, so `libGLES_android.so` is moved to
 `/system/lib/egl_android_disabled/` (move it back to revert).
+
+`build.prop`: `ro.opengles.version=131072`. Having a working driver is not
+enough -- apps do not probe it, they ask the framework what the *device*
+claims, and `ActivityManager.getDeviceConfigurationInfo().reqGlEsVersion` is
+just this property. The vendor firmware set it for the Shine 3's GPU and the
+Clara HD's `build.prop` has no such line, so games exited at startup with
+"your device does not support OpenGL ES 2.0" while SurfaceFlinger was
+happily reporting `OpenGL ES 3.0 SwiftShader`. It is declared as 2.0
+(`0x20000`), the level apps gate on, rather than the 3.0 SwiftShader
+advertises.
 
 `framework.jar`: `HardwareRenderer.isAvailable()` returns false (and
 `framework.odex` is deleted so the change is used). With a GLES 2.0 driver
@@ -280,7 +307,7 @@ Two more things were needed before vold would actually mount it:
   armeabi): a real libGDX/GLES 2.0 game, and the end-to-end test that
   SwiftShader actually runs games on this hardware.
 
-## `hwcomposer.imx6.so` — alpha blending
+## `hwcomposer.imx6.so` — alpha blending, vsync, partial updates
 
 The composer copied every layer's pixels opaquely. Android's window stack
 relies on per-pixel alpha: the launcher's window is transparent where the
@@ -291,6 +318,22 @@ working; `/data/system/users/0/wallpaper` held a valid image). `blend_px()`
 now honours `HWC_BLENDING_PREMULT` / `HWC_BLENDING_COVERAGE`, with fast
 paths for fully opaque and fully transparent pixels, so translucent
 windows, dialogs and menus composite correctly.
+
+**Vsync.** The composer reported no `HWC_DISPLAY_VSYNC_PERIOD` and never
+delivered a vsync event, so SurfaceFlinger's DispSync had nothing to drive
+it: an app that draws continuously (slither.io) produced one frame and then
+stopped until something else -- switching away and back -- forced a
+composition. The composer now reports a 10 Hz period, which is honest for
+this panel, and its thread delivers the callback at that rate while vsync is
+enabled.
+
+**Partial updates.** Every `set()` used to push a full-panel
+`UPDATE_MODE_FULL` refresh, the black/white inversion flash, at the frame
+rate of whatever was on screen. `hwc_set()` now takes the union of the
+`displayFrame`s it actually composed and sends `UPDATE_MODE_PARTIAL` for
+that rectangle (aligned to the EPDC's 8-pixel x/width requirement), with a
+full refresh every 60th update to clear the ghosting partial updates leave
+behind. A blinking cursor or a clock no longer flashes the whole screen.
 
 Tolino had *also* removed `WallpaperManagerService`'s creation from
 `ServerThread` (only its local slot and the `systemRunning()` call in the

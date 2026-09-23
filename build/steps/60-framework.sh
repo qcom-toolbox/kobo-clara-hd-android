@@ -28,6 +28,10 @@ info "PackageManagerService: grant signature permissions to privileged apps"
 python3 "$T" insert-prologue "$S/pm/PackageManagerService.smali" \
 	"$P/PackageManagerService.grantSignaturePermission.patched-prologue.smali"
 
+info "PackageManagerService: empty list, not null, for a missing package"
+python3 "$T" replace-method "$S/pm/PackageManagerService.smali" \
+	"$P/PackageManagerService.queryIntent.patched-methods.smali"
+
 info "ServerThread: re-register the wallpaper service the vendor removed"
 # Anchor including its indentation, so the inserted block lines up.
 printf '    invoke-virtual/range {v150 .. v150}, Lcom/android/server/wm/WindowManagerService;->detectSafeMode()Z\n' \

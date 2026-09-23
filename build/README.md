@@ -13,8 +13,8 @@ Two inputs cannot be shipped here, so the build asks for them:
 
 | Input | What it is | Where it comes from |
 | --- | --- | --- |
-| `android_root` directory | The Tolino Shine 3's Android 4.4.2 system: its framework jars, HALs, `init.rc`, and the whole `/system` tree. Everything this port does is a patch **on top of it**. | Tolino's own firmware update (`mytolino.com` service/update downloads for the Shine 3). Unpack the update and extract its Android root filesystem image, then mount or unpack it into a directory. |
-| base SD card image | A Kobo Clara HD card image, used for its partition table, U-Boot and recovery. The build overwrites the kernel, device tree and root filesystem inside it. | An image of your own device's card, taken before you modify it. |
+| `android_root` directory | The Tolino Shine 3's Android 4.4.2 system: its framework jars, HALs, `init.rc`, and the whole `/system` tree. Everything this port does is a patch **on top of it**. | Tolino's public firmware download, unpacked with `build/extract_vendor_root.sh`. |
+| base SD card image | A Kobo Clara HD card image, used for its partition table, U-Boot and recovery. The build overwrites the kernel, device tree and root filesystem inside it. | An image of **your own** device's card, taken before you modify it. |
 
 Neither is redistributed by this repository: the Tolino system is
 proprietary vendor software, and the Kobo image contains Kobo's bootloader
@@ -27,6 +27,10 @@ storage partition is created to fill it:
 ```sh
 cat /sys/block/sdX/size        # e.g. 124735488 for a 64 GB card
 ```
+
+**[`INPUTS.md`](INPUTS.md) walks through all of this step by step** — the
+firmware URL, the extraction, imaging your own card, flashing, and what
+first boot looks like. Start there if you have not done this before.
 
 ## What the build downloads
 

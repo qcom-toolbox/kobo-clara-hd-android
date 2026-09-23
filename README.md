@@ -34,9 +34,11 @@ update).
 ```
 
 You provide two things it cannot redistribute — the Tolino Shine 3
-firmware's `android_root` (the Android system this port patches) and a Kobo
-Clara HD card image (for its partition table and bootloader) — and it
-downloads everything else. See [`build/README.md`](build/README.md).
+firmware's `android_root` (the Android system this port patches) and an
+image of your own Clara HD's card (for its partition table and bootloader) —
+and it downloads everything else.
+**[`build/INPUTS.md`](build/INPUTS.md) is the step-by-step guide** to
+getting both; [`build/README.md`](build/README.md) covers the build itself.
 
 ```sh
 sudo dd if=Kobo_clara-hd.img of=/dev/sdX bs=1M conv=fsync

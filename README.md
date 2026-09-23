@@ -19,11 +19,11 @@ real GLES 2.0 game.
 | WiFi | `rtl8189fs` built against this kernel |
 | Front light | LM3630A bank B, plus a preloaded control app |
 | Storage | the SD card partition Android expects, which the image never created |
+| Battery | level and charging state report correctly |
 | Preloaded | AOSP Browser, Ghost Commander, Front Light, a test game |
 
-Not done: suspend/resume and battery life, a reader app (the vendor's is
-removed rather than adapted), and e-ink refresh tuning (every frame is a
-full update).
+Not done: suspend/resume, a reader app (the vendor's is removed rather than
+adapted), and e-ink refresh tuning (every frame is a full update).
 
 ## Building it yourself
 

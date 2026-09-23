@@ -16,6 +16,16 @@ firmware on internal storage untouched.
 > unfinished display work here (partial updates and per-window waveform modes
 > are not implemented), not of the hardware.
 
+## Disclaimer
+
+I am not responsible for: bricked devices, data loss, dead SD cards, dead
+Kobo factory-line ~~workers~~ cowboys, sleepless nights, marriage crises,
+general existential dread, dead PMICs, dead RAM, dead ICs, dead CPUs, dead
+e-ink panels, broken touchscreens, dead batteries, fried USB ports, any Kobo
+mischief, dead cats, dogs, goldfish, nuclear wars, or you getting fired
+because you thought that just because it runs Android, you could use your
+Kobo e-reader as an alarm clock.
+
 **Current state: usable.** Boots to the stock AOSP launcher with a working
 navigation and status bar, touch, adb over USB, WiFi, front light control,
 external storage, wallpapers, and OpenGL ES 2.0 on the CPU — enough for a
@@ -133,16 +143,6 @@ This is an unofficial port with no warranty of any kind. It runs from a
 separate SD card and does not touch the Kobo's internal storage, but you are
 modifying your own device at your own risk. Note the photosensitive epilepsy
 warning at the top: the panel flashes on every frame.
-
-## Disclaimer
-
-I am not responsible for: bricked devices, data loss, dead SD cards, dead
-Kobo factory-line ~~workers~~ cowboys, sleepless nights, marriage crises,
-general existential dread, dead PMICs, dead RAM, dead ICs, dead CPUs, dead
-e-ink panels, broken touchscreens, dead batteries, fried USB ports, any Kobo
-mischief, dead cats, dogs, goldfish, nuclear wars, or you getting fired
-because you thought that just because it runs Android, you could use your
-Kobo e-reader as an alarm clock.
 
 ## SD card layout
 

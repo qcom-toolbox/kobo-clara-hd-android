@@ -15,7 +15,6 @@
 !.gitignore
 !README.md
 !ROADMAP.md
-!ROADMAP_v2.md
 
 # Framework + kernel patches, and the NTX image tool.
 !patches/

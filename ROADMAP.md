@@ -19,11 +19,12 @@ reproduces the image from a user's own firmware copy.
 | Front light | LM3630A bank B via the vendor lights HAL, plus a preloaded control app (2.44) |
 | Storage | the 4th SD partition Android expects, which the image never created (2.45) |
 | Battery | level and charging state report correctly through the ricoh619 PMIC |
+| Sleep | the power button sleeps the device and it wakes again |
 | Wallpapers | vendor had removed the service; compositor ignored alpha (2.46) |
 
 Still open: the vendor's stock reader app is removed rather than adapted;
-screenshots via SurfaceFlinger's GLES path are unverified; suspend/resume has
-not been looked at at all.
+screenshots via SurfaceFlinger's GLES path are unverified; how much power
+sleep actually saves has not been measured.
 
 Sections 1–2.37 below are the original plan and the bring-up log that
 followed it; 2.38 onwards continue that log. This document is the long-form
@@ -2083,9 +2084,11 @@ table at the top). What is left is smaller and more ordinary:
    commands used by hand and its framework patching is verified against a
    pristine vendor jar, but the whole script has never been run start to
    finish anywhere else.
-2. **Suspend/resume.** Never investigated; the device currently stays awake
-   while plugged in for development. Battery reporting itself works (level
-   and charging state), so what is missing is the sleep path, not the gauge.
+2. **Power draw in sleep.** The power button sleeps and wakes the device,
+   and battery level/charging report correctly, but nothing has been
+   measured: whether this reaches a real low-power state or merely blanks
+   the panel decides whether the thing lasts days or hours. (Development
+   keeps it awake while plugged in, which is unrelated.)
 3. **The reader app.** The vendor's EPub app is removed rather than adapted;
    a reader that suits e-ink (and the front light) is the obvious next
    userspace job.

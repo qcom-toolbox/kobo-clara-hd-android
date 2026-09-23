@@ -1,13 +1,33 @@
 # Android 4.4.2 KitKat on Kobo Clara HD — Roadmap
 
-## Status: planning document, no build has started yet
+## Status: running on hardware
 
-This document is the technical plan for porting Android 4.4.2 (KitKat) to the
-Kobo Clara HD, with a working WiFi stack. It exists because this is a multi-month,
-iterative, on-hardware embedded engineering project — not something that gets
-"finished" in a chat session. Compiling, flashing, and debugging over serial against
-your physical unit has to happen on your bench. What follows is the plan to execute
-there, grounded in real precedent rather than a from-scratch guess.
+Android 4.4.2 boots from SD card on a real Clara HD and is usable: e-ink
+display and touch, navigation bar and stock status bar, adb over USB, WiFi,
+front light brightness, external storage, wallpapers, and OpenGL ES 2.0 on
+the CPU (SwiftShader) — enough for a real GLES 2.0 game. `build/build.sh`
+reproduces the image from a user's own firmware copy.
+
+| Works | Notes |
+| --- | --- |
+| Display | custom hwcomposer straight to the EPDC framebuffer, with alpha blending (2.38, 2.46) |
+| Touch | rotation-consistent with what is drawn (2.38) |
+| adb | configfs + FunctionFS gadget (2.39) |
+| System UI | stock AOSP SystemUI/Keyguard, nav bar + status bar (2.41) |
+| OpenGL ES 2.0 | SwiftShader on the Cortex-A9 (2.42) |
+| WiFi | rtl8189fs built against this kernel (2.43) |
+| Front light | LM3630A bank B via the vendor lights HAL, plus a preloaded control app (2.44) |
+| Storage | the 4th SD partition Android expects, which the image never created (2.45) |
+| Wallpapers | vendor had removed the service; compositor ignored alpha (2.46) |
+
+Still open: the vendor's stock reader app is removed rather than adapted;
+screenshots via SurfaceFlinger's GLES path are unverified; suspend/resume and
+battery life have not been looked at at all.
+
+Sections 1–2.37 below are the original plan and the bring-up log that
+followed it; 2.38 onwards continue that log. This document is the long-form
+record — `README.md` is the short version, `patches/README.md` explains each
+patch, and `build/README.md` is how to build it.
 
 **Revision note:** the strategy below changed significantly after finding that the
 Tolino Shine 3 — a board effectively identical to the Clara HD — ships production
@@ -1817,6 +1837,205 @@ now most likely needs either live debugging of the actual hung process
 instrumenting the real framework Java code directly rather than a native
 stand-in.
 
+## 2.38 Launcher on the panel: one compositor doing rotation, format and clipping
+
+With the app-fork deadlock fixed (smali no-ops for the two WindowManager
+overrides that reach `PowerManagerService.mLock` from the AMS side), the
+launcher came up but with a 376 px black band along one edge and touches
+landing in the wrong place. Both came from the same mistake: SurfaceFlinger
+sizes the display from gralloc's `fb0` (1448x1072, landscape-native), so
+WindowManager rotates the UI itself (rotation 270) and InputReader rotates
+touch with it. The compositor was *also* rotating, and clipping layer frames
+against a 1072-wide "logical portrait" screen. Fixed by giving it the physical
+dimensions and honouring each layer's `transform` instead — plus a
+format-aware conversion (layer buffers are 32-bit `RGBX_8888`/`RGBA_8888`,
+the panel is `RGB565`) and a source-major loop into a cached shadow buffer,
+after a destination-major one caused a hard reset from cache thrashing alone.
+
+## 2.39 adb over USB: the gadget the vendor rules cannot drive
+
+This kernel (4.1.15) has no `android_usb` gadget driver at all — its USB
+gadget support moved to configfs — so every `on property:sys.usb.config=adb`
+rule in the vendor's `init*.usb.rc` writes to a sysfs path that does not
+exist and silently does nothing. Replaced with a boot script that builds the
+gadget by hand (configfs + FunctionFS: `libcomposite.ko`, `usb_f_fs.ko`,
+`ffs.adb` function, `mount -t functionfs`), then starts adbd.
+
+adbd still fell back to TCP. Its own trace log gave it away: it drops to uid
+`shell` *before* testing whether `/dev/usb-ffs/adb/ep0` exists, and the
+directory created for the mount was root-only, so the test failed and it
+chose the network transport. `chmod 0755` on the path fixed it. A probe that
+wrote the stock descriptor blob as root had already proved the kernel side
+was fine, which is what ruled out the descriptor format entirely.
+
+Also here: the gadget is bound to the UDC from a loop once `ep1` appears,
+because f_fs unbinds it whenever ep0 is closed (an adbd restart), and
+`ro.adb.secure` is 0 — key approval is answered by a SystemUI prompt that
+only runs when "USB debugging" is on in Settings, which it deliberately is
+not (that setting is what makes UsbDeviceManager stop adbd).
+
+## 2.40 Boot instrumentation was the performance problem
+
+The system was so slow that SystemUI was ANR-killed twice before it could
+add the navigation bar, and the launcher took almost two minutes to appear.
+The cause was our own debugging: `init.rc` still set the binder driver's
+`debug_mask` to 65535, logging every transaction to the kernel log (~100k
+lines per boot), zygote still preloaded a binder-tracing `LD_PRELOAD` shim
+into every app, and a watchdog script SIGQUIT'd system_server on every scan.
+84% of CPU time was in the kernel and individual binder calls took 150–380 ms.
+Removing all of it made the device responsive; the nav bar investigation
+then became tractable.
+
+## 2.41 Navigation bar: a vendor SystemUI that hides it by design
+
+`qemu.hw.mainkeys=0` was set and the window policy agreed a nav bar should
+exist, but SystemUI never created one. Decompiling it (baksmali needs
+`-a 19`; without the right API level whole classes fail to disassemble)
+showed Tolino had replaced the stock decision — AOSP asks the window manager
+`hasNavigationBar()` — with "show it only if `KeyCharacterMap.deviceHasKey()`
+reports neither HOME nor BACK". The Clara's key layouts declare both, so the
+bar could never appear.
+
+Rather than patch that, both SystemUI and Keyguard were replaced with the
+stock 4.4.2 ones from Google's emulator image (they share `android.uid.systemui`
+and must be signed alike). Two consequences, both fixed: Tolino's
+`StorageManager.(un)registerListener` takes an `IStorageEventListener` their
+own `StorageEventListener` does not implement, so the stock listener classes
+gain that interface; and the stock apps are not signed with the vendor
+platform key, so `PackageManagerService.grantSignaturePermission()` now grants
+signature permissions to privileged `/system/priv-app` apps — without it
+SystemUI cannot obtain `STATUS_BAR_SERVICE` and never starts.
+
+## 2.42 OpenGL ES 2.0 without a GPU: SwiftShader on the Cortex-A9
+
+The i.MX6SLL has no GPU and Android's built-in software renderer implements
+only GLES 1.x, so anything requesting a GLES 2.0 config crashed outright
+(CPU-Z: `IllegalArgumentException: No configs match configSpec`). SwiftShader
+— Google's CPU renderer, pinned at the last revision with an Android GLES
+build — now provides it. Four fixes were needed for this device:
+
+- Subzero's `ICE_CACHELINE_BOUNDARY` padding makes the compiler emit
+  128-bit-aligned NEON stores into heap objects, but bionic's `malloc` is
+  only 8-byte aligned: `SIGBUS`. The padding only avoids false sharing
+  between cores, and this is single-core, so it was dropped.
+- Its JIT targeted `HWDivArm`; the Cortex-A9 has no `SDIV`/`UDIV`
+  (`SIGILL` in generated code). Switched to the NEON target.
+- Generated code then needed runtime helpers (`__divsi3`, `fmodf`, the
+  `__Sz_*` conversions) that the Reactor's ELF loader could not resolve at
+  all. It now resolves them to C implementations — the float and vector ones
+  declared `aapcs-vfp`, because Subzero emits hard-float calls while
+  armeabi-v7a is soft-float — and Subzero always calls through a register,
+  since the loader cannot apply `R_ARM_CALL` and the helpers are far outside
+  `BL` range anyway.
+- `posix_fallocate` does not exist before API 21.
+
+Installing it system-wide then crash-looped SurfaceFlinger. Two more: KitKat's
+linker reports only a basename from `dladdr`, so libEGL could not find
+`libGLESv2_swiftshader.so` beside it and context creation failed (the path now
+comes from `/proc/self/maps`); and fb0 is RGB565 while SurfaceFlinger with
+HWC 1.1 wants an RGBA_8888 `EGL_FRAMEBUFFER_TARGET_ANDROID` config, so the
+display format is reported as RGBA_8888 and the hwcomposer converts.
+
+App UIs are deliberately kept on the software path
+(`HardwareRenderer.isAvailable()` returns false): with a GLES 2.0 driver
+present every app would otherwise render its whole interface through
+SwiftShader.
+
+## 2.43 WiFi: the driver had to be built against this kernel
+
+The vendor's `/system/wifi/8189fs.ko` targets Tolino's 3.0.35 kernel and
+cannot load here. The RTL8189FS is an SDIO part on usdhc3; the open-source
+`rtl8189fs` driver builds against this 4.1.15 tree with one fix (its Makefile
+copies `ccflags-y` into `EXTRA_CFLAGS`, which 4.1's kbuild folds back the
+other way — a self-referencing variable that stops MODPOST). Power comes from
+Kobo's own `sdio_wifi_pwr.ko`, already in the tree, which drives the
+power/reset GPIOs and triggers the card-detect. `wpa_supplicant` had to be
+added to `init.rc`: the vendor defines it in `init.freescale.rc`, which is
+not imported on this board.
+
+## 2.44 Front light, and an animation setting that broke the nav bar
+
+The brightness slider moved and nothing happened: `init.E60K00.rc` points the
+lights HAL at `mxc_msp430_fl.0`, the MSP430 companion of other Netronix
+boards, which does not exist here (`E/lights: can not open file`). The front
+light is the LM3630A's **bank B** — `/sys/class/backlight/lm3630a_ledb`, whose
+`max_brightness` of 255 maps 1:1 onto Android's range. Pointing the HAL there
+and giving system_server ownership of those root-owned sysfs files made the
+slider work. The vendor's own control is a pop-up that dismisses itself
+instantly, so `apps/frontlight` is a small preloaded app with a persistent
+slider and presets.
+
+E-ink also wants no animations, so the three scales were pinned to 0 — and
+that broke the navigation bar: a game requesting "lights out" dims the bar to
+dots, and the transition back is a property animator, so with
+`animator_duration_scale` at 0 SystemUI never repainted and the buttons
+stayed invisible. Only the window and transition scales stay at 0.
+
+## 2.45 External storage: a partition that was never created
+
+Most apps crashed, and the stock browser crashed on launch with
+`SecurityException: Invalid mkdirs path: /mnt/media_rw/sdcard1/...`. Android's
+primary external storage on this firmware is the *4th partition of the boot SD
+card* (`fstab`: `voldmanaged=sdcard1:4`, and framework-res marks
+`/storage/sdcard1` primary and non-removable). Our image only ever had three
+partitions, so there was nothing to mount and `getExternalStorageState()`
+never became `mounted`.
+
+Creating it was not enough. vold matched the volume by the 3.0 kernel's
+platform-device path, which never matches a 4.1 device-tree kernel (the boot
+SD is `soc/2100000.aips-bus/2194000.usdhc`), so the volume stayed in
+No-Media. With the path fixed it still failed, and the reason is a kernel
+difference: vold maps `voldmanaged=sdcard1:4` onto a device through the
+`NPARTS`/`PARTN` block uevent variables, which only the AOSP common kernels
+emit. Mainline 4.1 emits neither, so vold assumed one partition at index 1,
+tried to mount `/dev/block/vold/16777215:255`, "identified" it as NTFS, and
+still reported the volume Mounted while nothing was. Both uevent variables
+are now emitted the way AOSP does it.
+
+One self-inflicted trap here: the image ran ~16 MB past the start of that
+partition, so every flash destroyed its filesystem. The image is truncated at
+the partition boundary now.
+
+## 2.46 Wallpapers: two removals and one compositor bug
+
+Wallpapers rendered as a black screen. Three separate causes, found in that
+order:
+
+1. Tolino removed `WallpaperManagerService`'s creation from `ServerThread`
+   (its local slot and the `systemRunning()` call in the systemReady callback
+   are both still there), so the `wallpaper` service never registered and
+   every call failed with "WallpaperService not running". Restored.
+2. Their framework-res carries no `default_wallpaper` drawable, so with none
+   chosen the screen is legitimately black.
+3. The real one: our compositor copied every layer opaquely. The launcher's
+   window is transparent where the wallpaper shows through, so its
+   transparent-black pixels overwrote the wallpaper. It now honours
+   `HWC_BLENDING_PREMULT`/`COVERAGE`, with fast paths for fully opaque and
+   fully transparent pixels.
+
+Setting a wallpaper had worked all along — `setBitmap()` succeeded and the
+file was on disk; it just could never be seen. Verified by dumping
+`/dev/graphics/fb0` directly, which is the only way to see what the panel
+actually shows: SurfaceFlinger's own screenshot path composites separately
+and was black for the same reason.
+
+## 2.47 A build others can run
+
+`build/build.sh` turns this from "a device someone got working" into
+something reproducible: it asks for the two inputs that cannot be
+redistributed (the Tolino firmware's `android_root`, and a Clara HD card
+image for its partition table and bootloader), downloads everything else, and
+applies every patch in `patches/` to that copy. Steps are separate and
+resumable, and each patch asserts on the vendor text it expects, so a
+different firmware revision fails loudly rather than producing a subtly
+broken system.
+
+Testing the framework patcher against a *pristine* vendor `services.jar`
+caught two real bugs in the recorded patches — one captured with stray
+annotation lines, one with duplicated labels — that would have produced a
+corrupt framework. The automated result now matches the jar running on the
+device instruction for instruction.
+
 ## 3. Open risk register
 
 - **Shine 3 hardware access**: turned out to be unnecessary for everything done so
@@ -1855,34 +2074,25 @@ stand-in.
 
 ## 4. Next concrete action
 
-Every open question that forensic analysis alone could answer is now answered
-(Sections 2.5–2.9). What's left is real build/integration work. Proposed sequence,
-smallest safe step first:
+The bring-up questions this section used to plan for are answered: the kernel
+boots, the vendor userspace runs, and the device is usable (see the status
+table at the top). What is left is smaller and more ordinary:
 
-1. **Prove the kernel boots at all, before worrying about Android userspace.**
-   Take Tolino's real `E60K00`-line kernel (`tolino-fw/os44/kernel.bin`, Linux
-   3.0.35, Section 2.6) and try to get it to a serial console on the real Clara HD
-   via Kobo's U-Boot (which already knows how to load a `zImage` per its own
-   `mmcboot`/`loadimage` env vars, Section 2.5). This needs Clara HD's real device
-   tree (`kobo-kernel/imx6sll-kobo-clarahd.dts`, Section 2.8) paired with it, since
-   Tolino's kernel differentiates boards via `ntx_hwconfig-static`
-   rather than a compiled DT the way postmarketOS's kernel does — reconciling
-   those two board-support mechanisms is the first real technical task, not more
-   forensics.
-2. This can be built and tested entirely against a **working copy of `Kobo.img`
-   on disk** — repartition the copy (reclaiming space from the 6.9GB
-   `KOBOeReader` partition, Section 2.9), write the new kernel/ramdisk into it,
-   and only write the result to a physical card once it looks right. Never
-   touching your live card or the original `Kobo.img` until there's something
-   worth testing.
-3. Once there's a candidate image: the actual flash-and-test cycle needs a real
-   card and a serial cable to watch boot output — that part is yours to run, with
-   me reading back whatever the console shows.
-
-Before that build work starts in earnest: **do you have a spare/second microSD
-card** to test on? Nothing so far has touched your live card or `Kobo.img`, but
-the first real flash attempt should go to a card you're comfortable overwriting,
-not your only working postmarketOS setup or the sole stock backup.
+1. **Run `build/build.sh` end to end on a clean machine.** Its steps are the
+   commands used by hand and its framework patching is verified against a
+   pristine vendor jar, but the whole script has never been run start to
+   finish anywhere else.
+2. **Suspend/resume and battery life.** Never investigated. The device
+   currently stays awake while plugged in for development.
+3. **The reader app.** The vendor's EPub app is removed rather than adapted;
+   a reader that suits e-ink (and the front light) is the obvious next
+   userspace job.
+4. **SurfaceFlinger's screenshot path.** `screencap` goes through GLES, so it
+   now runs on SwiftShader; it worked when checked but has not been tested
+   beyond that. `/dev/graphics/fb0` is the reliable way to see the panel.
+5. **Panel quality.** Waveform mode is `AUTO` with a full update every frame;
+   partial updates and per-window waveform choices are untouched, which is
+   where e-ink responsiveness and ghosting are won or lost.
 
 ---
 

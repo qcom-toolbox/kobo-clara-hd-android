@@ -1,6 +1,13 @@
 # Android 4.4.2 KitKat on Kobo Clara HD — Roadmap
 
-## Status: planning document, no build has started yet
+## Status: superseded
+
+This is an earlier, shorter copy of the roadmap whose log stops at section
+2.31. **`ROADMAP.md` is the current one** — it carries the same history plus
+everything since, and a status table of what works. This file is kept only
+so the earlier reasoning is not lost.
+
+## Status at the time of writing: planning document, no build had started
 
 This document is the technical plan for porting Android 4.4.2 (KitKat) to the
 Kobo Clara HD, with a working WiFi stack. It exists because this is a multi-month,

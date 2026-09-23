@@ -147,6 +147,11 @@ service wpa_supplicant /system/bin/wpa_supplicant \\
     disabled
     oneshot
 
+# Keep the OOM killer off watchdogd: killing it resets the device.
+service oomprotect /system/bin/sh /system/bin/oom_protect.sh
+    class main
+    user root
+
 # E-ink: pin the animation scales once boot has settled.
 service noanim /system/bin/sh /system/bin/disable_anim.sh
     class main

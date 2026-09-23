@@ -300,6 +300,48 @@ running"; that registration is restored in `services.jar`. The vendor
 framework-res carries no `default_wallpaper` drawable either, so with no
 wallpaper set the screen is legitimately black until one is chosen.
 
+## Memory: app priorities, and a reboot under load
+
+Running Geekbench rebooted the device. The kernel log shows why: memory ran
+out (2.7 MB free, no swap), and once Android's lowmemorykiller had nothing
+left to reclaim the kernel's own OOM killer started on init's helpers --
+`ueventd`, `healthd` and **`watchdogd`**. That last one is fatal: it is the
+only thing petting the i.MX2 hardware watchdog (60 s, `nowayout=0`), so the
+SoC resets a minute later. The kernel says as much on the way out:
+
+```
+Out of memory: Kill process 71 (watchdogd) score 0 or sacrifice child
+watchdog watchdog0: watchdog did not stop!
+```
+
+It picked daemons because **every process had the same oom_score_adj**
+(-941, the value inherited from zygote), so a 200 MB benchmark looked no more
+killable than a 500 kB daemon. Verified on the device: an app reads -941 both
+in the foreground and in the background, while `com.android.settings` --
+which runs as uid `system`, the same uid as system_server -- correctly gets
+0. system_server can only write the files of processes sharing its uid: the
+proc files are owned by the app's own uid, mainline makes them writable by
+the owner only, and system_server holds `CAP_SYS_RESOURCE` but not
+`CAP_DAC_OVERRIDE` (its capability set matches AOSP's, minus `CAP_SYS_BOOT`).
+
+Two changes, one guard and one fix:
+
+- `patches/kernel/proc-base.c` (`fs/proc/base.c`): `oom_adj` and
+  `oom_score_adj` become writable by others, gated by a new
+  `oom_adj_write_permitted()` that requires either `CAP_SYS_RESOURCE` or a
+  matching uid. The existing rule -- lowering past `oom_score_adj_min` needs
+  `CAP_SYS_RESOURCE` -- is untouched, so this grants system_server exactly
+  what AOSP kernels give it and nothing more.
+- `patches/device/oom_protect.sh`, run by init as the `oomprotect` service,
+  pins `watchdogd`, `healthd`, `ueventd`, `servicemanager_new` and `vold` to
+  `OOM_SCORE_ADJ_MIN` so the OOM killer can never choose them, whatever else
+  goes wrong. (init has to do it: lowering below the current value needs
+  `CAP_SYS_RESOURCE`, which the adb `su` deliberately lacks.)
+
+With the guard alone the device already survives: heavy memory pressure kills
+an app instead of resetting. The kernel change is what makes Android reclaim
+sensibly in the first place.
+
 ## Front Light app (`/system/app/FrontLight.apk`)
 
 The vendor's brightness control is a pop-up slider that dismisses itself

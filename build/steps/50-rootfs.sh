@@ -59,6 +59,7 @@ install -m 755 "$WORK/su" "$OVERLAY/system/xbin/su"   # ownership fixed in 70-im
 
 # --- boot scripts ----------------------------------------------------------
 install -m 755 "$ROOT/patches/device/disable_anim.sh" "$OVERLAY/system/bin/disable_anim.sh"
+install -m 755 "$ROOT/patches/device/oom_protect.sh" "$OVERLAY/system/bin/oom_protect.sh"
 
 # --- config ----------------------------------------------------------------
 say "Config"

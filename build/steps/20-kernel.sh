@@ -15,6 +15,7 @@ cp "$ROOT/patches/kernel/logger.c"              "$K/drivers/staging/android/logg
 cp "$ROOT/patches/kernel/logger.h"              "$K/drivers/staging/android/logger.h"
 cp "$ROOT/patches/kernel/genhd.c"               "$K/block/genhd.c"
 cp "$ROOT/patches/kernel/partition-generic.c"   "$K/block/partition-generic.c"
+cp "$ROOT/patches/kernel/proc-base.c"           "$K/fs/proc/base.c"
 cp "$ROOT/patches/kernel/imx6sll-e60k02.dts"    "$K/arch/arm/boot/dts/imx6sll-e60k02.dts"
 
 cd "$K"

@@ -236,9 +236,29 @@ the vendor EPub app's "waiting for internal storage to be mounted" spin
 
 `patches/sdcard/add_p4.py <image> <card sectors>` adds the entry (FAT32
 LBA, starting at sector 15491072, the first 2048-aligned sector after p3).
-Flashing only writes the first ~7.4 GB, so the partition has to be
-formatted once on the host afterwards:
-`sudo mkfs.vfat -F 32 -n KOBO /dev/sdX4`.
+Format it once on the host after the first flash:
+`sudo mkfs.vfat -F 32 -n KOBO /dev/sdX4`. The image is also truncated to
+exactly 15491072 sectors (7931428864 bytes) — the vendor image ran ~16 MB
+past that point, so flashing it zeroed the start of p4 and destroyed the
+filesystem every time.
+
+Two more things were needed before vold would actually mount it:
+
+- **`fstab.E60K00`** (copy in `patches/sdcard/`) matched the volume by the
+  3.0 kernel's platform-device path,
+  `/devices/platform/sdhci-esdhc-imx.1/mmc_host/mmc0`. On this 4.1
+  device-tree kernel the boot SD is
+  `/devices/platform/soc/2100000.aips-bus/2194000.usdhc/mmc_host/mmc0`, so
+  nothing ever matched and vold kept the volume in No-Media.
+- **Kernel block uevents** (`patches/kernel/genhd.c`,
+  `partition-generic.c`): vold's `DirectVolume` maps `voldmanaged=sdcard1:4`
+  onto a device through the `NPARTS`/`PARTN` uevent variables, which only
+  the AOSP common kernels emit. Without them vold assumed one partition at
+  index 1, so `mPartMinors[3]` stayed -1 and it tried to mount
+  `/dev/block/vold/16777215:255` — which it then "identified" as NTFS and
+  reported as Mounted although nothing was mounted at all. Both device
+  types now set a `.uevent` callback that adds `NPARTS` (disk) and `PARTN`
+  (partition), matching AOSP.
 
 ## Preloaded apps (`/system/app`)
 

@@ -134,6 +134,16 @@ separate SD card and does not touch the Kobo's internal storage, but you are
 modifying your own device at your own risk. Note the photosensitive epilepsy
 warning at the top: the panel flashes on every frame.
 
+## Disclaimer
+
+I am not responsible for: bricked devices, data loss, dead SD cards, dead
+Kobo factory-line ~~workers~~ cowboys, sleepless nights, marriage crises,
+general existential dread, dead PMICs, dead RAM, dead ICs, dead CPUs, dead
+e-ink panels, broken touchscreens, dead batteries, fried USB ports, any Kobo
+mischief, dead cats, dogs, goldfish, nuclear wars, or you getting fired
+because you thought that just because it runs Android, you could use your
+Kobo e-reader as an alarm clock.
+
 ## SD card layout
 
 Raw sector offsets the Kobo/Netronix U-Boot reads (see

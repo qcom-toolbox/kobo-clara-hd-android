@@ -1,9 +1,6 @@
-# PackageManagerService.grantSignaturePermission() — patched prologue
+# services.jar - PackageManagerService.grantSignaturePermission(): inserted
+# right after the method's .prologue.
 .method private grantSignaturePermission(Ljava/lang/String;Landroid/content/pm/PackageParser$Package;Lcom/android/server/pm/BasePermission;Ljava/util/HashSet;)Z
-        }
-    .end annotation
-
-    .prologue
     # Grant signature permissions to privileged (/system/priv-app) apps.
     # The stock AOSP SystemUI/Keyguard used here are not signed with this
     # vendor's platform key, so they would otherwise be refused

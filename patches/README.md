@@ -1,3 +1,9 @@
+# Patches
+
+`build/build.sh` applies everything here to a copy of your own vendor
+firmware; `build/README.md` explains what you have to supply. This document
+is the reasoning behind each change.
+
 # Framework patches
 
 These are applied by disassembling the device's own `services.jar` /

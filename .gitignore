@@ -32,6 +32,12 @@
 !tolino-fw/android_root/
 !tolino-fw/android_root/*.sh
 
+# The image build scripts.
+!build/
+!build/**
+build/work/
+build/deps/
+
 # The preloaded Front Light app (source only: no build output, no keystore).
 !apps/
 !apps/frontlight/

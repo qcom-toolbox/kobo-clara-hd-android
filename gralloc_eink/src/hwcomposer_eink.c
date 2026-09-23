@@ -9,7 +9,7 @@
  * Composition itself is done here in plain software: each layer's pixel
  * buffer is mapped via the gralloc module's lock()/unlock() and memcpy'd
  * into the real framebuffer, respecting displayFrame placement. Scaling
- * and alpha blending are not implemented (rare for this device's simple
+ * are not implemented (rare for this device's simple
  * fullscreen UI); anything requesting them is still copied unscaled/opaque
  * rather than dropped, since a visually-imperfect frame beats none at all.
  *
@@ -188,6 +188,86 @@ static inline uint16_t to_rgb565(const uint8_t *p, int sbpp, int format)
 	return (uint16_t)(((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3));
 }
 
+/* Does this source format carry a meaningful alpha channel? */
+static inline int format_has_alpha(int format)
+{
+	return format == HAL_PIXEL_FORMAT_RGBA_8888 ||
+	       format == HAL_PIXEL_FORMAT_BGRA_8888;
+}
+
+/*
+ * Blend one source pixel into the RGB565 shadow.
+ *
+ * Without this every layer was copied opaquely, so a translucent window
+ * (the launcher's, whose background is transparent so the wallpaper shows
+ * through) overwrote what was underneath with its own transparent-black
+ * pixels -- which is why wallpapers rendered as a black screen.
+ *
+ * HWC_BLENDING_PREMULT carries premultiplied colour, COVERAGE does not;
+ * planeAlpha scales the whole layer. Fully opaque and fully transparent
+ * pixels take the cheap paths, which is the overwhelming majority.
+ */
+static inline void blend_px(uint16_t *dst, const uint8_t *p, int sbpp, int format,
+		int blending, unsigned plane_alpha)
+{
+	unsigned r, g, b, a;
+
+	if (blending == HWC_BLENDING_NONE || !format_has_alpha(format))
+		a = 255;
+	else
+		a = p[3];
+
+	if (plane_alpha < 255)
+		a = (a * plane_alpha + 127) / 255;
+
+	if (a == 0)
+		return;
+
+	if (a == 255 && plane_alpha == 255) {
+		*dst = to_rgb565(p, sbpp, format);
+		return;
+	}
+
+	if (sbpp == 2) {
+		uint16_t v = *(const uint16_t *)p;
+		r = ((v >> 11) & 0x1f) << 3;
+		g = ((v >> 5) & 0x3f) << 2;
+		b = (v & 0x1f) << 3;
+	} else if (format == HAL_PIXEL_FORMAT_BGRA_8888) {
+		b = p[0]; g = p[1]; r = p[2];
+	} else {
+		r = p[0]; g = p[1]; b = p[2];
+	}
+
+	if (plane_alpha < 255) {
+		r = (r * plane_alpha + 127) / 255;
+		g = (g * plane_alpha + 127) / 255;
+		b = (b * plane_alpha + 127) / 255;
+	}
+
+	if (blending == HWC_BLENDING_COVERAGE) {
+		r = (r * a + 127) / 255;
+		g = (g * a + 127) / 255;
+		b = (b * a + 127) / 255;
+	}
+
+	{
+		uint16_t d = *dst;
+		unsigned dr = ((d >> 11) & 0x1f) << 3;
+		unsigned dg = ((d >> 5) & 0x3f) << 2;
+		unsigned db = (d & 0x1f) << 3;
+		unsigned inv = 255 - a;
+
+		r += (dr * inv + 127) / 255;
+		g += (dg * inv + 127) / 255;
+		b += (db * inv + 127) / 255;
+		if (r > 255) r = 255;
+		if (g > 255) g = 255;
+		if (b > 255) b = 255;
+		*dst = (uint16_t)(((r & 0xf8) << 8) | ((g & 0xfc) << 3) | (b >> 3));
+	}
+}
+
 static int compose_layer(eink_hwc_t *hw, hwc_layer_1_t *l)
 {
 	if (!l->handle || !hw->query_fn || !hw->gralloc)
@@ -222,6 +302,13 @@ static int compose_layer(eink_hwc_t *hw, hwc_layer_1_t *l)
 		ALOGE("hwcomposer_eink: gralloc lock failed for handle %p: rc=%d", (void*)l->handle, rc);
 		return -1;
 	}
+
+	/*
+	 * planeAlpha only exists from HWC 1.2 on, and SurfaceFlinger leaves it
+	 * unset below that; we advertise 1.1, so per-layer alpha is all there
+	 * is to honour.
+	 */
+	const unsigned plane_alpha = 255;
 
 	int sbpp = src_bytes_per_pixel(sformat);
 	int dbpp = hw->bpp;
@@ -280,9 +367,10 @@ static int compose_layer(eink_hwc_t *hw, hwc_layer_1_t *l)
 			if (dx < 0 || dx >= hw->width || dy < 0 || dy >= hw->height)
 				continue;
 
-			*(uint16_t *)((uint8_t *)hw->shadow + (size_t)dy * dst_row_stride
-					+ (size_t)dx * 2) =
-				to_rgb565(srow + (size_t)srcx * sbpp, sbpp, sformat);
+			blend_px((uint16_t *)((uint8_t *)hw->shadow
+						+ (size_t)dy * dst_row_stride + (size_t)dx * 2),
+					srow + (size_t)srcx * sbpp, sbpp, sformat,
+					l->blending, plane_alpha);
 		}
 	}
 

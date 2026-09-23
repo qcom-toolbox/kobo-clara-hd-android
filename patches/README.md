@@ -215,10 +215,12 @@ unused; `lm3630a_led` is Kobo's 0-100 wrapper). Changed there:
 
 `init.rc` also gets a `noanim` oneshot service running
 `/system/bin/disable_anim.sh`, which waits for `sys.boot_completed` and
-pins `window_animation_scale`, `transition_animation_scale` and
-`animator_duration_scale` to 0. On e-ink the animations only add ghosting
-and latency, and the settings live in `/data`, so this re-applies them
-after a wipe.
+pins `window_animation_scale` and `transition_animation_scale` to 0 (pure
+ghosting on e-ink). `animator_duration_scale` deliberately stays at 1:
+with it at 0, SystemUI never repainted the navigation bar when returning
+from the dimmed "lights out" state an app (slither.io) requests, leaving a
+blank black strip with invisible buttons. The settings live in `/data`, so
+this re-applies them after a wipe.
 
 ## External storage: the missing 4th partition
 
@@ -271,6 +273,26 @@ Two more things were needed before vold would actually mount it:
 - `ShatteredPixelDungeon.apk` — 0.7.2d (F-Droid archive, `minSdk 8`,
   armeabi): a real libGDX/GLES 2.0 game, and the end-to-end test that
   SwiftShader actually runs games on this hardware.
+
+## `hwcomposer.imx6.so` — alpha blending
+
+The composer copied every layer's pixels opaquely. Android's window stack
+relies on per-pixel alpha: the launcher's window is transparent where the
+wallpaper should show through, so its transparent-black pixels overwrote
+the wallpaper and the screen went black — which looked like "wallpapers do
+not render" (the wallpaper service, the picker and `setBitmap()` were all
+working; `/data/system/users/0/wallpaper` held a valid image). `blend_px()`
+now honours `HWC_BLENDING_PREMULT` / `HWC_BLENDING_COVERAGE`, with fast
+paths for fully opaque and fully transparent pixels, so translucent
+windows, dialogs and menus composite correctly.
+
+Tolino had *also* removed `WallpaperManagerService`'s creation from
+`ServerThread` (only its local slot and the `systemRunning()` call in the
+systemReady callback were left), so nothing ever registered the
+`wallpaper` service and every call failed with "WallpaperService not
+running"; that registration is restored in `services.jar`. The vendor
+framework-res carries no `default_wallpaper` drawable either, so with no
+wallpaper set the screen is legitimately black until one is chosen.
 
 ## Front Light app (`/system/app/FrontLight.apk`)
 

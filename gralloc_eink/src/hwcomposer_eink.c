@@ -92,6 +92,7 @@ typedef struct {
 	hwc_procs_t const *procs;
 	pthread_t vsync_thread;
 	volatile int vsync_enabled;
+	volatile int vsync_requested;
 	int stop_vsync;
 } eink_hwc_t;
 
@@ -127,8 +128,8 @@ typedef struct {
  * actually changed, so a game redrawing its window does not repaint the
  * status and navigation bars along with it.
  */
-static void eink_send_update(int fd, int left, int top, int width, int height,
-		int full)
+static void eink_send_update(int fd, int panel_width, int left, int top,
+		int width, int height, int full)
 {
 	struct mxcfb_update_data update;
 
@@ -137,9 +138,20 @@ static void eink_send_update(int fd, int left, int top, int width, int height,
 
 	/* The EPDC wants x/width on 8-pixel boundaries; grow the region
 	 * outwards rather than handing the driver something it has to round
-	 * for us. */
-	left &= ~7;
-	width = (width + 7) & ~7;
+	 * for us. Rounding left down moves the right edge too, so recompute
+	 * the width from the edge we actually want to keep, and never let the
+	 * result run past the panel -- the driver rejects an out-of-range
+	 * region outright, which would mean no update at all. */
+	{
+		int right = left + width;
+
+		left &= ~7;
+		width = ((right - left) + 7) & ~7;
+		if (left + width > panel_width)
+			width = panel_width - left;
+		if (width <= 0)
+			return;
+	}
 
 	memset(&update, 0, sizeof(update));
 	update.update_region.left = left;
@@ -156,6 +168,17 @@ static void eink_send_update(int fd, int left, int top, int width, int height,
 
 static int g_prepare_count;
 static int g_set_count;
+static unsigned long g_frames_composed, g_updates_sent, g_frames_identical;
+static unsigned long g_compose_us, g_update_us;
+static unsigned long g_vsync_events, g_eventcontrol_count;
+
+static unsigned long now_us(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return (unsigned long)ts.tv_sec * 1000000UL + (unsigned long)ts.tv_nsec / 1000UL;
+}
 
 static int hwc_prepare(hwc_composer_device_1_t *dev, size_t numDisplays,
 		hwc_display_contents_1_t **displays)
@@ -366,6 +389,47 @@ static int compose_layer(eink_hwc_t *hw, hwc_layer_1_t *l)
 		return -1;
 	}
 
+	/*
+	 * Fast path for the common case: no rotation, and a layer that is
+	 * opaque (no alpha channel, or blending switched off). That covers
+	 * every full-screen app and game, and it is worth a special case --
+	 * the general loop below costs a function call and two bounds checks
+	 * per pixel, which measured 400 ms for one 1448x1072 frame, i.e. it
+	 * was the single thing limiting the whole device to about one frame
+	 * per second. Clipping once per layer instead of once per pixel and
+	 * copying whole rows brings that down to a row-at-a-time blit.
+	 */
+	if (xform == 0 && (l->blending == HWC_BLENDING_NONE || !format_has_alpha(sformat))) {
+		/* Source columns that land inside both buffers. */
+		int sx0 = 0, sx1 = cw, sy0 = 0, sy1 = ch;
+
+		if (cleft + sx0 < 0)       sx0 = -cleft;
+		if (dleft + sx0 < 0)       sx0 = -dleft;
+		if (cleft + sx1 > sw)      sx1 = sw - cleft;
+		if (dleft + sx1 > hw->width)  sx1 = hw->width - dleft;
+		if (ctop + sy0 < 0)        sy0 = -ctop;
+		if (dtop + sy0 < 0)        sy0 = -dtop;
+		if (ctop + sy1 > sh)       sy1 = sh - ctop;
+		if (dtop + sy1 > hw->height) sy1 = hw->height - dtop;
+
+		for (int sy = sy0; sy < sy1; sy++) {
+			const uint8_t *srow = src + (size_t)(ctop + sy) * src_row_stride
+					+ (size_t)(cleft + sx0) * sbpp;
+			uint16_t *drow = (uint16_t *)((uint8_t *)hw->shadow
+					+ (size_t)(dtop + sy) * dst_row_stride
+					+ (size_t)(dleft + sx0) * 2);
+
+			if (sbpp == 2) {
+				memcpy(drow, srow, (size_t)(sx1 - sx0) * 2);
+				continue;
+			}
+			for (int n = sx1 - sx0; n > 0; n--, srow += sbpp)
+				*drow++ = to_rgb565(srow, sbpp, sformat);
+		}
+		hw->gralloc->unlock((gralloc_module_t const *)hw->gralloc, l->handle);
+		return 0;
+	}
+
 	/* Iterate SOURCE-major so source reads run sequentially along a row.
 	 * A rotation is a transpose, so one side of the copy has to be
 	 * strided; keeping the strided side on the destination (the shadow
@@ -434,6 +498,8 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 	static int layer_set_logs;
 	size_t num_primary = (numDisplays > 0 && displays[0]) ? displays[0]->numHwLayers : 0;
 	int verbose;
+
+	unsigned long t_enter = now_us();
 
 	g_set_count++;
 	verbose = g_set_count <= 10 ||
@@ -507,12 +573,12 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 				g_set_count, list->numHwLayers, composed, failed, dirty);
 		if (dirty) {
 			static int updates;
-			int full;
-
-			/* Single sequential bulk copy into the real framebuffer --
-			 * see the comment on hw->shadow. This is the only place
-			 * fb_mem is ever written. */
-			memcpy(hw->fb_mem, hw->shadow, hw->fb_size);
+			/* What the previous frame painted. A layer that goes away
+			 * (the nav bar hiding) leaves no displayFrame behind, so
+			 * without this its area would never be repainted and a
+			 * ghost of it would stay on the panel. */
+			static int px0, py0, px1, py1;
+			int full, changed;
 
 			if (dx0 < 0) dx0 = 0;
 			if (dy0 < 0) dy0 = 0;
@@ -521,16 +587,77 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 			if (dx1 <= dx0 || dy1 <= dy0) {
 				dx0 = 0; dy0 = 0; dx1 = hw->width; dy1 = hw->height;
 			}
+			if (px1 > px0 && py1 > py0) {
+				if (px0 < dx0) dx0 = px0;
+				if (py0 < dy0) dy0 = py0;
+				if (px1 > dx1) dx1 = px1;
+				if (py1 > dy1) dy1 = py1;
+			}
+			px0 = dx0; py0 = dy0; px1 = dx1; py1 = dy1;
 
 			/* The shadow is cleared to white and recomposed every
 			 * frame, so anything the update leaves out keeps its old
 			 * contents on the panel; a periodic full update also
 			 * clears the ghosting partial updates leave behind. */
-			full = (++updates % EINK_FULL_UPDATE_EVERY) == 0;
+			full = (updates % EINK_FULL_UPDATE_EVERY) == 0;
 			if (full) {
 				dx0 = 0; dy0 = 0; dx1 = hw->width; dy1 = hw->height;
 			}
-			eink_send_update(hw->fb_fd, dx0, dy0, dx1 - dx0, dy1 - dy0, full);
+
+			/* Copy row by row over the update region and notice
+			 * whether any of it actually differs from what the panel
+			 * is already showing. An app that redraws an unchanged
+			 * screen (a game sitting on its menu, a video that is
+			 * paused) otherwise costs a full e-ink refresh per frame
+			 * for no visible change at all. This is the only place
+			 * fb_mem is ever written. */
+			changed = 0;
+			for (int y = dy0; y < dy1; y++) {
+				size_t off = (size_t)y * hw->stride_bytes + (size_t)dx0 * 2;
+				size_t len = (size_t)(dx1 - dx0) * 2;
+				uint8_t *dst = (uint8_t *)hw->fb_mem + off;
+				const uint8_t *src = (const uint8_t *)hw->shadow + off;
+
+				if (memcmp(dst, src, len) == 0)
+					continue;
+				memcpy(dst, src, len);
+				changed = 1;
+			}
+
+			g_frames_composed++;
+			g_compose_us += now_us() - t_enter;
+			if (!changed) {
+				g_frames_identical++;
+			} else {
+				unsigned long t_upd = now_us();
+
+				updates++;
+				g_updates_sent++;
+				eink_send_update(hw->fb_fd, hw->width, dx0, dy0,
+						dx1 - dx0, dy1 - dy0, full);
+				g_update_us += now_us() - t_upd;
+			}
+			/* Heartbeat: enough to tell "nothing reaches the
+			 * composer" from "frames arrive and are identical",
+			 * which look the same on a panel that is not changing. */
+			if ((g_set_count % 256) == 0) {
+				static unsigned long last_log_us, last_composed;
+				unsigned long nowu = now_us();
+				unsigned long dt = nowu - last_log_us;
+				unsigned long dn = g_frames_composed - last_composed;
+
+				ALOGI("hwcomposer_eink: set #%d composed=%lu updates=%lu identical=%lu "
+					"rect=(%d,%d)-(%d,%d) full=%d | %lu.%02lu fps in, "
+					"compose avg %lums, ioctl avg %lums",
+					g_set_count, g_frames_composed, g_updates_sent,
+					g_frames_identical, dx0, dy0, dx1, dy1, full,
+					dt ? dn * 1000000UL / dt : 0,
+					dt ? (dn * 100000000UL / dt) % 100 : 0,
+					g_frames_composed ? g_compose_us / g_frames_composed / 1000 : 0,
+					g_updates_sent ? g_update_us / g_updates_sent / 1000 : 0);
+				last_log_us = nowu;
+				last_composed = g_frames_composed;
+			}
 		}
 		list->retireFenceFd = -1;
 	}
@@ -540,10 +667,25 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 static int hwc_eventControl(hwc_composer_device_1_t *dev, int disp, int event, int enabled)
 {
 	eink_hwc_t *hw = (eink_hwc_t *)dev;
-	ALOGI("hwcomposer_eink: eventControl(disp=%d, event=%d, enabled=%d) called", disp, event, enabled);
+	/* Only on a change: SurfaceFlinger toggles this many times a second. */
+	if (enabled != hw->vsync_enabled)
+		ALOGI("hwcomposer_eink: eventControl(disp=%d, event=%d, enabled=%d)",
+			disp, event, enabled);
 	if (event != HWC_EVENT_VSYNC)
 		return -EINVAL;
 	hw->vsync_enabled = enabled;
+	/*
+	 * Latch the request. SurfaceFlinger turns vsync on to get a single
+	 * event, waits for it, then turns it off again; if that whole
+	 * sequence fell between two of this thread's ticks the event was
+	 * never delivered and SurfaceFlinger waited forever -- the display
+	 * froze until something else (the navigation bar appearing, an app
+	 * switch) forced a transaction. The latch guarantees one event per
+	 * enable, whenever it arrived.
+	 */
+	if (enabled)
+		hw->vsync_requested = 1;
+	g_eventcontrol_count++;
 	return 0;
 }
 
@@ -622,9 +764,11 @@ static void *vsync_thread_main(void *arg)
 		 * SurfaceFlinger builds its model out of these. */
 		clock_gettime(CLOCK_MONOTONIC, &ts);
 		int64_t now_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-		if (hw->vsync_enabled && hw->procs && hw->procs->vsync) {
+		if ((hw->vsync_enabled || hw->vsync_requested) && hw->procs && hw->procs->vsync) {
+			hw->vsync_requested = 0;
 			hw->procs->vsync(hw->procs, HWC_DISPLAY_PRIMARY, now_ns);
 			tick++;
+			g_vsync_events++;
 			if (tick <= 5 || (tick % 150) == 0)
 				ALOGI("hwcomposer_eink: vsync thread delivered callback #%d", tick);
 		} else if (!logged_wait && (tick == 0)) {
@@ -637,6 +781,14 @@ static void *vsync_thread_main(void *arg)
 				logged_wait = 1;
 			}
 		}
+		/* Status even when nothing is composing: "frames stopped" and
+		 * "frames are identical" look the same on an e-ink panel. */
+		if ((tick % 50) == 0 && tick != 0)
+			ALOGI("hwcomposer_eink: status sets=%d composed=%lu updates=%lu "
+				"identical=%lu vsyncs=%lu eventControl=%lu enabled=%d",
+				g_set_count, g_frames_composed, g_updates_sent,
+				g_frames_identical, g_vsync_events, g_eventcontrol_count,
+				hw->vsync_enabled);
 	}
 	return NULL;
 }

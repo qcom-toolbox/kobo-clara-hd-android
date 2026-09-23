@@ -233,11 +233,11 @@ What came out of it, concretely:
   confirmation of the SL/SLL split from Section 1. Board design shared, SoC swapped.
 
 ### Where things are on disk
-- `/home/enzo/clara-hd/kobo-kernel/kernel/` — Kobo's extracted vendor kernel source
+- `<tree>/kobo-kernel/kernel/` — Kobo's extracted vendor kernel source
   (Section 2.5)
-- `/home/enzo/clara-hd/tolino-fw/os44/` — extracted Shine-3-line firmware artifacts:
+- `<tree>/tolino-fw/os44/` — extracted Shine-3-line firmware artifacts:
   `boot.img`, `kernel.bin` (raw zImage), `ntx_hwconfig-static`
-- `/home/enzo/clara-hd/tolino-fw/boot.img` + `ramdisk_extract/` — the Android 8.1
+- `<tree>/tolino-fw/boot.img` + `ramdisk_extract/` — the Android 8.1
   Allwinner package's ramdisk (reference only, not load-bearing for this SoC)
 
 ### Kernel unpacked and inspected (done)
@@ -527,7 +527,7 @@ this environment (confirmed earlier: `/dev/sde` is `root:disk`, no passwordless
 sudo). Concrete handoff:
 
 ```
-sudo dd if=/home/enzo/clara-hd/Kobo_test.img of=/dev/sdX bs=4M status=progress
+sudo dd if=<tree>/Kobo_test.img of=/dev/sdX bs=4M status=progress
 ```
 (replace `/dev/sdX` with the spare card's actual device node — check with `lsblk`
 first, **not** your live postmarketOS card) — then connect a USB-serial adapter to

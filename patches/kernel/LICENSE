@@ -1,0 +1,13 @@
+The .c/.h/.dts files in this directory are modified Linux kernel sources,
+taken from Kobo's GPL release of the Clara HD 4.1.15 kernel
+(kobolabs/Kobo-Reader, hw/imx6sll-clara/kernel.tar.bz2).
+
+They are GPL-2.0-only, and so are the changes made to them here. Full text:
+../../LICENSES/GPL-2.0.txt
+
+They are kept as whole files rather than patched in place so that the GPL
+kernel tree itself does not have to be vendored into this repository; the
+build copies them over a freshly downloaded copy of Kobo's tree.
+
+mk_ntx_image.py is our own and is covered by the repository's BSD 2-Clause
+licence (../../LICENSE).

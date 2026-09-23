@@ -118,6 +118,12 @@ def init_rc():
             '    chmod 0664 /sys/class/backlight/lm3630a_ledb/bl_power\n',
             'init.rc: wifi power + front light permissions')
 
+    # servicemanager: our AOSP build, with its stderr captured (the vendor
+    # prebuilt died repeatedly during bring-up, see ROADMAP 2.32).
+    sub(p, 'service servicemanager /system/bin/servicemanager',
+        'service servicemanager /system/bin/sh /svcmgr_wrapper.sh',
+        'init.rc: servicemanager from AOSP source')
+
     services = '''
 # --- Clara HD port ---------------------------------------------------------
 

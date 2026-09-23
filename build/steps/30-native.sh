@@ -95,6 +95,29 @@ mkdir -p "$WORK/hw"
 	2>>"$WORK/native.log" || die "link failed: gralloc wrapper (see $WORK/native.log)"
 info "hwcomposer.imx6.so and gralloc.default.so built"
 
+# servicemanager, from AOSP 4.4.2 source (see servicemanager/README.md). The
+# vendor's prebuilt one died repeatedly and could not be debugged.
+#
+# -DBINDER_IPC_32BIT=1 is mandatory: it sets the size of
+# struct binder_write_read, which is encoded in the BINDER_WRITE_READ ioctl
+# number itself, so without it every call fails with EINVAL.
+#
+# <linux/binder.h> is copied into a directory of its own rather than adding
+# the kernel's include path, which would shadow the NDK's own headers; and
+# AOSP's android_filesystem_capability.h is suppressed by its include guard
+# because it redefines structs bionic already has (only the AID_* constants
+# from android_filesystem_config.h are needed here).
+mkdir -p "$WORK/binderinc/linux"
+cp "$DEPS/kernel/include/uapi/linux/android/binder.h" "$WORK/binderinc/linux/binder.h"
+"$TC/arm-linux-androideabi-gcc" -O2 -Wall -std=gnu99 --sysroot="$SR" \
+	-DBINDER_IPC_32BIT=1 \
+	-D_SYSTEM_CORE_INCLUDE_PRIVATE_ANDROID_FILESYSTEM_CAPABILITY_H \
+	-I "$ROOT/servicemanager" -I "$WORK/binderinc" -I "$WORK/kitkat/system_core" \
+	-o "$WORK/servicemanager_new" \
+	"$ROOT/servicemanager/service_manager.c" "$ROOT/servicemanager/binder.c" \
+	2>>"$WORK/native.log" || die "servicemanager build failed (see $WORK/native.log)"
+info "servicemanager_new built"
+
 # su: root for the adb shell only (owner root, group shell, mode 4750 later).
 "$NDK21/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi19-clang" \
 	-O2 -fPIE -pie -o "$WORK/su" "$ROOT/gralloc_eink/src/su.c" \

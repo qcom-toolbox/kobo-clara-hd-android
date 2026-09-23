@@ -13,6 +13,9 @@
 *
 
 !.gitignore
+!LICENSE
+!LICENSES/
+!LICENSES/**
 !README.md
 !ROADMAP.md
 
@@ -31,11 +34,18 @@
 !tolino-fw/android_root/
 !tolino-fw/android_root/*.sh
 
+# servicemanager built from AOSP source (Apache-2.0, see its README).
+!servicemanager/
+!servicemanager/*.c
+!servicemanager/*.h
+!servicemanager/README.md
+
 # The image build scripts.
 !build/
 !build/**
 build/work/
 build/deps/
+__pycache__/
 
 # The preloaded Front Light app (source only: no build output, no keystore).
 !apps/

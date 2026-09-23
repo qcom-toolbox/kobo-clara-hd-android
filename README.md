@@ -63,6 +63,7 @@ deny-by-default so none of that is published.
 | `patches/sdcard/` | the storage partition the vendor fstab expects |
 | `gralloc_eink/src/` | the e-ink hwcomposer, gralloc shim, `su`, and the native debug probes |
 | `apps/frontlight/` | the preloaded front light app (source) |
+| `servicemanager/` | Android's `servicemanager` built from AOSP source (the vendor's prebuilt one kept dying) |
 | `tolino-fw/android_root/*.sh` | boot-time scripts on the device |
 | `ROADMAP.md` | the long-form log: how each problem was found and fixed |
 
@@ -101,6 +102,24 @@ single-threaded clients like `healthd`. The Android logger driver
 SystemUI that hides the navigation bar whenever the device declares HOME/BACK
 keys; and a `WallpaperManagerService` the vendor deleted from system_server
 startup.
+
+## Licence
+
+BSD 2-Clause for the work written here — the e-ink compositor, `su`, the
+Front Light app, the build scripts, the documentation. The modified Linux
+kernel files under `patches/kernel/` stay GPL-2.0-only, and the SwiftShader
+patch keeps SwiftShader's Apache-2.0. See [`LICENSE`](LICENSE).
+
+**No vendor firmware is in this repository** — no Kobo or Tolino binaries,
+no Android system images. What is here are patches, sources and notes; the
+build applies them to a copy of firmware you download yourself, for a device
+you own. The small `.smali` excerpts under `patches/framework/` are patched
+method bodies recorded so the change is reviewable, in the same spirit as a
+diff.
+
+This is an unofficial port with no warranty of any kind. It runs from a
+separate SD card and does not touch the Kobo's internal storage, but you are
+modifying your own device at your own risk.
 
 ## SD card layout
 

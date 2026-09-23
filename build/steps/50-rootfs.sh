@@ -33,6 +33,10 @@ mkdir -p "$OVERLAY/system/wifi" "$OVERLAY/system/lib/modules"
 install -m 644 "$WORK/8189fs.ko" "$OVERLAY/system/wifi/8189fs.ko"
 install -m 644 "$WORK/sdio_wifi_pwr.ko" "$OVERLAY/system/lib/modules/sdio_wifi_pwr.ko"
 
+# --- servicemanager --------------------------------------------------------
+install -m 755 "$WORK/servicemanager_new" "$OVERLAY/servicemanager_new"
+install -m 755 "$ROOT/tolino-fw/android_root/svcmgr_wrapper.sh" "$OVERLAY/svcmgr_wrapper.sh"
+
 # --- usb adb (configfs + FunctionFS) --------------------------------------
 install -m 755 "$ROOT/tolino-fw/android_root/usb_adb_setup.sh" "$OVERLAY/usb_adb_setup.sh"
 

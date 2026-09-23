@@ -1,0 +1,62 @@
+BSD 2-Clause License
+
+Copyright (c) 2026 qcom-toolbox
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice,
+   this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+
+----------------------------------------------------------------------------
+
+Files under other licences
+--------------------------
+
+The licence above covers the work written for this project: the e-ink
+hwcomposer and gralloc shim, `su`, the Front Light app, the build scripts and
+the documentation.
+
+Some files are derived from other projects and keep their original licence:
+
+* `patches/kernel/*.c`, `patches/kernel/*.h` — modified Linux kernel source
+  files (Kobo's 4.1.15 tree). **GPL-2.0-only**; full text in
+  `LICENSES/GPL-2.0.txt`. Our changes to them are GPL-2.0-only as well.
+
+* `patches/kernel/imx6sll-e60k02.dts` — a modified kernel device tree source,
+  same GPL-2.0-only terms as the tree it comes from.
+
+* `patches/swiftshader/ss2019-kitkat.patch` — a patch against Google's
+  SwiftShader, which is Apache-2.0. Applying it produces Apache-2.0 code; the
+  patch is offered under the same terms.
+
+* `servicemanager/*.c`, `servicemanager/*.h` — Android's `servicemanager`
+  from AOSP `android-4.4.2_r2` with small local changes so it builds
+  standalone. **Apache-2.0**; full text in `LICENSES/Apache-2.0.txt`. See
+  `servicemanager/README.md`.
+
+* `patches/framework/*.smali`, `patches/systemui/*` — small excerpts of
+  Android framework methods as they exist *after* patching, recorded so the
+  change is reviewable. They are derived from the vendor's own compiled
+  firmware and are not ours to license; they are included for
+  interoperability and documentation, in the same spirit as a diff.
+
+No vendor firmware, no Kobo or Tolino binaries, and no Android system images
+are contained in this repository. The build applies these patches to a copy
+of firmware that the person running it downloads for a device they own.

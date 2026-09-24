@@ -347,6 +347,26 @@ Two more things were needed before vold would actually mount it:
   armeabi): a real libGDX/GLES 2.0 game, and the end-to-end test that
   SwiftShader actually runs games on this hardware.
 
+## Vendor apps are load-bearing
+
+Two of Tolino's apps look like junk on this hardware and are not:
+
+* **MsgE6** (`com.ntx.msg`) -- a messaging app on a device with no telephony.
+  The vendor's `ShutdownThread` draws the power-off screen from it, so
+  deleting it turns every shutdown into a system_server crash and the device
+  restarts instead of powering off:
+
+  ```
+  android.content.ActivityNotFoundException: Unable to find explicit activity
+  class {com.ntx.msg/com.ntx.msg.MsgPowerOffActivity}
+      at com.android.server.power.ShutdownThread.ShowPowerOffScreen(ShutdownThread.java:131)
+  ```
+
+* **ntx.PowerEnhance** -- part of how this board sleeps.
+
+Tolino's `bootanimation.zip` stays as well; dropping it only trades their
+animation for AOSP's, which this panel renders through SwiftShader.
+
 ## Stock AOSP apps, and the model number
 
 The apps come out of Google's own 4.4.2 emulator system image, which keeps

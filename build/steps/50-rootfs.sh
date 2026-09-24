@@ -59,14 +59,19 @@ done
 rm -f "$OVERLAY/system/priv-app/EPubProd.apk" "$OVERLAY/system/priv-app/EPubProd.odex" \
 	"$OVERLAY/system/app/SystemCrashReporter.apk" "$OVERLAY/system/app/SystemCrashReporter.odex"
 
-# Netronix's messaging app: there is no telephony on this device, so it has
-# nothing to message with. (ntx.PowerEnhance stays -- it is part of how this
-# board sleeps.)
-rm -f "$OVERLAY/system/app/MsgE6.apk" "$OVERLAY/system/app/MsgE6.odex"
-
-# Tolino's boot animation. With no zip present, bootanimation falls back to
-# AOSP's own "ANDROID" animation, which is what this port should look like.
-rm -f "$OVERLAY/system/media/bootanimation.zip"
+# Do NOT remove MsgE6 (com.ntx.msg). It looks like a messaging app for a
+# device with no telephony, but the vendor's ShutdownThread draws the
+# power-off screen from it:
+#
+#   android.content.ActivityNotFoundException: Unable to find explicit
+#   activity class {com.ntx.msg/com.ntx.msg.MsgPowerOffActivity}
+#       at com.android.server.power.ShutdownThread.ShowPowerOffScreen(...)
+#
+# Without it every shutdown crashes system_server, so the device restarts
+# instead of powering off -- an unkillable reboot loop from the outside.
+# ntx.PowerEnhance stays for the same class of reason: it is part of how this
+# board sleeps. Vendor apps on this image are load-bearing until proven
+# otherwise.
 
 # --- root shell for adb ----------------------------------------------------
 install -m 755 "$WORK/su" "$OVERLAY/system/xbin/su"   # ownership fixed in 70-image.sh

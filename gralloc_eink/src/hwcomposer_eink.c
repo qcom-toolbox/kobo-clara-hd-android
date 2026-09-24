@@ -71,6 +71,13 @@ typedef struct {
 	 * RAM with the same layout as fb_mem; hwc_set() does one sequential
 	 * bulk memcpy(fb_mem, shadow, fb_size) per frame. */
 	void *shadow;
+	/* What the panel is currently showing, in ordinary cached RAM. The
+	 * comparison that decides whether a frame is worth an e-ink refresh
+	 * used to read fb_mem, and reading back framebuffer memory is
+	 * punishingly slow (measured: 208 ms of a 329 ms frame, ~15 MB/s).
+	 * Keeping a cached copy makes that comparison a RAM-to-RAM one and
+	 * leaves fb_mem write-only. */
+	void *panel;
 	size_t fb_size;
 	/* All of these are the PHYSICAL panel/framebuffer dimensions, straight
 	 * from fb0's vinfo.xres/yres (1448x1072 landscape scan order).
@@ -181,6 +188,7 @@ static volatile int g_prepare_count;
 static volatile int g_set_count;
 static unsigned long g_frames_composed, g_updates_sent, g_frames_identical;
 static unsigned long g_compose_us, g_update_us;
+static unsigned long g_clear_us, g_layers_us, g_diff_us;
 static unsigned long g_vsync_events, g_eventcontrol_count, g_nudges;
 static unsigned long g_blank_count, g_prepare_composites;
 static int g_last_blank = -1, g_last_prepare_layers;
@@ -638,7 +646,13 @@ static int hwc_compose(hwc_composer_device_1_t *dev, size_t numDisplays,
 		 * because that is what an e-ink panel idles at -- an uninitialized
 		 * or stale buffer would leave any region no layer covers reading
 		 * as a black band. */
-		memset(hw->shadow, 0xff, hw->fb_size);
+		{
+			unsigned long t_clear = now_us();
+
+			memset(hw->shadow, 0xff, hw->fb_size);
+			g_clear_us += now_us() - t_clear;
+		}
+		unsigned long t_layers = now_us();
 
 		for (size_t i = 0; i < list->numHwLayers; i++) {
 			hwc_layer_1_t *l = &list->hwLayers[i];
@@ -679,6 +693,7 @@ static int hwc_compose(hwc_composer_device_1_t *dev, size_t numDisplays,
 				failed++;
 			}
 		}
+		g_layers_us += now_us() - t_layers;
 		if (verbose)
 			ALOGI("hwcomposer_eink: set() #%d numHwLayers=%zu composed=%d failed=%d dirty=%d",
 				g_set_count, list->numHwLayers, composed, failed, dirty);
@@ -723,18 +738,22 @@ static int hwc_compose(hwc_composer_device_1_t *dev, size_t numDisplays,
 			 * for no visible change at all. This is the only place
 			 * fb_mem is ever written. */
 			changed = 0;
+			unsigned long t_diff = now_us();
 			for (int y = dy0; y < dy1; y++) {
 				size_t off = (size_t)y * hw->stride_bytes + (size_t)dx0 * 2;
 				size_t len = (size_t)(dx1 - dx0) * 2;
-				uint8_t *dst = (uint8_t *)hw->fb_mem + off;
 				const uint8_t *src = (const uint8_t *)hw->shadow + off;
+				uint8_t *seen = (uint8_t *)hw->panel + off;
 
-				if (memcmp(dst, src, len) == 0)
+				/* Compare in RAM, never against fb_mem. */
+				if (memcmp(seen, src, len) == 0)
 					continue;
-				memcpy(dst, src, len);
+				memcpy(seen, src, len);
+				memcpy((uint8_t *)hw->fb_mem + off, src, len);
 				changed = 1;
 			}
 
+			g_diff_us += now_us() - t_diff;
 			g_frames_composed++;
 			g_compose_us += now_us() - t_enter;
 			g_last_set_us = now_us();
@@ -967,12 +986,17 @@ static void *vsync_thread_main(void *arg)
 		if ((++loops % 50) == 0)
 			ALOGI("hwcomposer_eink: status sets=%d composed=%lu updates=%lu "
 				"identical=%lu vsyncs=%lu eventControl=%lu nudges=%lu enabled=%d "
-				"prepares=%lu prep_layers=%d blanks=%lu last_blank=%d prep_composites=%lu",
+				"prepares=%lu prep_composites=%lu | avg ms: total=%lu clear=%lu "
+				"layers=%lu diff=%lu ioctl=%lu",
 				g_set_count, g_frames_composed, g_updates_sent,
 				g_frames_identical, g_vsync_events, g_eventcontrol_count,
 				g_nudges, hw->vsync_enabled,
-				(unsigned long)g_prepare_count, g_last_prepare_layers,
-				g_blank_count, g_last_blank, g_prepare_composites);
+				(unsigned long)g_prepare_count, g_prepare_composites,
+				g_frames_composed ? g_compose_us / g_frames_composed / 1000 : 0,
+				g_frames_composed ? g_clear_us / g_frames_composed / 1000 : 0,
+				g_frames_composed ? g_layers_us / g_frames_composed / 1000 : 0,
+				g_frames_composed ? g_diff_us / g_frames_composed / 1000 : 0,
+				g_updates_sent ? g_update_us / g_updates_sent / 1000 : 0);
 	}
 	return NULL;
 }
@@ -985,6 +1009,7 @@ static int hwc_close(struct hw_device_t *dev)
 	if (hw->fb_mem && hw->fb_mem != MAP_FAILED)
 		munmap(hw->fb_mem, hw->fb_size);
 	free(hw->shadow);
+	free(hw->panel);
 	if (hw->fb_fd >= 0)
 		close(hw->fb_fd);
 	free(hw);
@@ -1041,13 +1066,20 @@ static int hwc_device_open(const hw_module_t *module, const char *name, hw_devic
 	}
 
 	hw->shadow = malloc(hw->fb_size);
-	if (!hw->shadow) {
-		ALOGE("hwcomposer_eink: failed to allocate %zu-byte shadow buffer", hw->fb_size);
+	hw->panel = malloc(hw->fb_size);
+	if (!hw->shadow || !hw->panel) {
+		ALOGE("hwcomposer_eink: failed to allocate %zu-byte shadow buffers", hw->fb_size);
+		free(hw->shadow);
+	free(hw->panel);
+		free(hw->panel);
 		munmap(hw->fb_mem, hw->fb_size);
 		close(hw->fb_fd);
 		free(hw);
 		return -ENOMEM;
 	}
+	/* Start from what fb0 holds, so the first frame does not repaint the
+	 * whole panel just because this copy was empty. */
+	memcpy(hw->panel, hw->fb_mem, hw->fb_size);
 
 	void *gr_handle = dlopen(GRALLOC_MODULE_PATH, RTLD_NOW);
 	if (gr_handle) {

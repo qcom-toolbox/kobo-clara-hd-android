@@ -46,7 +46,11 @@ install -m 644 "$WORK/apps/Keyguard.apk"  "$OVERLAY/system/priv-app/Keyguard.apk
 install -m 644 "$WORK/apps/Launcher2.apk" "$OVERLAY/system/priv-app/Launcher2.apk"
 rm -f "$OVERLAY/system/priv-app/SystemUI.odex" "$OVERLAY/system/priv-app/Keyguard.odex" \
 	"$OVERLAY/system/priv-app/Launcher2.odex"
-for a in Browser FrontLight GhostCommander ShatteredPixelDungeon; do
+install -m 644 "$WORK/apps/CalendarProvider.apk" "$OVERLAY/system/priv-app/CalendarProvider.apk"
+# Stock AOSP apps this device can actually use. No Music, SoundRecorder or
+# PicoTts: the Clara HD has no audio hardware at all.
+for a in Browser FrontLight GhostCommander ShatteredPixelDungeon \
+         Calculator DeskClock Calendar Email Gallery; do
 	install -m 644 "$WORK/apps/$a.apk" "$OVERLAY/system/app/$a.apk"
 done
 # The vendor reader app spins forever waiting for storage it never gets, and

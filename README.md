@@ -45,7 +45,7 @@ real GLES 2.0 game.
 | Storage | the SD card partition Android expects, which the image never created |
 | Battery | level and charging state report correctly |
 | Sleep | power button sleeps and wakes the device |
-| Preloaded | AOSP Browser, Ghost Commander, Front Light, a test game |
+| Preloaded | AOSP Browser, Calculator, Clock, Calendar, Email, Gallery, Ghost Commander, Front Light, a test game |
 
 Not done: a reader app (the vendor's is removed rather than adapted),
 measured battery life, and e-ink refresh tuning (every frame is a full

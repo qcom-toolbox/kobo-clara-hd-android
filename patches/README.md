@@ -307,6 +307,39 @@ Two more things were needed before vold would actually mount it:
   armeabi): a real libGDX/GLES 2.0 game, and the end-to-end test that
   SwiftShader actually runs games on this hardware.
 
+## Stock AOSP apps, and the model number
+
+The apps come out of Google's own 4.4.2 emulator system image, which keeps
+each APK's `classes.dex` next to the odex, so they run here unchanged:
+Calculator, Clock, Calendar (with its provider in `priv-app`), Email and
+Gallery, alongside the Browser and Launcher already used. Music,
+SoundRecorder and PicoTts are deliberately left out -- the Clara HD has no
+audio hardware.
+
+Gallery needs one change. It declares `android:sharedUserId="android.media"`,
+and every member of a shared user must carry the same signature; this copy is
+signed with AOSP's test key and the vendor's MediaProvider with Tolino's, so
+the package manager drops it:
+
+```
+Package com.android.gallery has no signatures that match those in
+shared user android.media; ignoring!
+```
+
+The build renames that id to `android.galry` -- the same length, so the binary
+XML string pool does not move -- which leaves Gallery alone in a shared user
+of its own, and signs it again with the same throwaway key as the Front Light
+app. It reaches the media provider through permissions regardless.
+
+`build.prop`: `ro.product.model=Kobo Clara HD`. The vendor firmware calls
+every device in this family `tolino`, which is what Settings shows as the
+model number.
+
+The KitKat easter egg needs nothing: `PlatLogoActivity` is still in
+framework-res and the dessert case lives in the stock SystemUI this port
+already installs. Settings → About → tap *Android version*, then long-press
+the K.
+
 ## `hwcomposer.imx6.so` — alpha blending, vsync, partial updates
 
 The composer copied every layer's pixels opaquely. Android's window stack

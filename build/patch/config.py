@@ -74,6 +74,15 @@ def build_prop():
     text = read(p)
     if 'qemu.hw.mainkeys' not in text:
         text = text.rstrip('\n') + '\n\n# Force the on-screen navigation bar (no hardware keys on this device).\nqemu.hw.mainkeys=0\n'
+    if 'ro.product.model=Kobo Clara HD' not in text:
+        out = []
+        for line in text.split('\n'):
+            if line.startswith('ro.product.model='):
+                # The vendor firmware calls every device of this family
+                # "tolino", which is what Settings shows as the model number.
+                line = 'ro.product.model=Kobo Clara HD'
+            out.append(line)
+        text = '\n'.join(out)
     if 'ro.opengles.version' not in text:
         text = text.rstrip('\n') + ('\n\n# SwiftShader provides GLES 2.0 (it advertises 3.0; 2.0 is the level apps\n'
                  '# actually gate on). Without this property\n'
@@ -88,7 +97,7 @@ def build_prop():
                  '# /sys/class/backlight/<dev>/brightness (max_brightness 255 = Android range).\n'
                  'hw.backlight.dev=lm3630a_ledb\n')
     write(p, text)
-    print('  + build.prop: qemu.hw.mainkeys=0, hw.backlight.dev=lm3630a_ledb,\n            ro.opengles.version=131072')
+    print('  + build.prop: qemu.hw.mainkeys=0, hw.backlight.dev=lm3630a_ledb,\n            ro.opengles.version=131072, ro.product.model=Kobo Clara HD')
 
 
 def init_rc():

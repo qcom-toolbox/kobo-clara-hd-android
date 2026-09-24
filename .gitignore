@@ -34,6 +34,12 @@
 !tolino-fw/android_root/
 !tolino-fw/android_root/*.sh
 
+# Device-side helper scripts, and how to read the composer's diagnostics.
+!tools/
+!tools/device/
+!tools/device/*.sh
+!tools/device/README.md
+
 # servicemanager built from AOSP source (Apache-2.0, see its README).
 !servicemanager/
 !servicemanager/*.c

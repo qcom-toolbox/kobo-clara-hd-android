@@ -120,6 +120,14 @@ typedef struct {
 #define EINK_FULL_UPDATE_EVERY 60
 
 /*
+ * The nudge in the vsync thread: how long after the last visible change to
+ * keep asking SurfaceFlinger to recomposite, and how recently it must have
+ * composited for a nudge to be pointless. See the comment there.
+ */
+#define EINK_NUDGE_IDLE_US  3000000UL
+#define EINK_NUDGE_QUIET_US  200000UL
+
+/*
  * Push a region of the framebuffer to the panel.
  *
  * UPDATE_MODE_PARTIAL redraws without the inversion flash, which is what
@@ -170,7 +178,9 @@ static int g_prepare_count;
 static int g_set_count;
 static unsigned long g_frames_composed, g_updates_sent, g_frames_identical;
 static unsigned long g_compose_us, g_update_us;
-static unsigned long g_vsync_events, g_eventcontrol_count;
+static unsigned long g_vsync_events, g_eventcontrol_count, g_nudges;
+/* When a composed frame last changed the panel, and when set() last ran. */
+static unsigned long g_last_change_us, g_last_set_us;
 
 static unsigned long now_us(void)
 {
@@ -626,11 +636,13 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 
 			g_frames_composed++;
 			g_compose_us += now_us() - t_enter;
+			g_last_set_us = now_us();
 			if (!changed) {
 				g_frames_identical++;
 			} else {
 				unsigned long t_upd = now_us();
 
+				g_last_change_us = t_upd;
 				updates++;
 				g_updates_sent++;
 				eink_send_update(hw->fb_fd, hw->width, dx0, dy0,
@@ -781,14 +793,44 @@ static void *vsync_thread_main(void *arg)
 				logged_wait = 1;
 			}
 		}
+		/*
+		 * Keep the pump primed while something is animating.
+		 *
+		 * A layer queueing a buffer is supposed to wake SurfaceFlinger
+		 * (onFrameAvailable -> signalLayerUpdate -> invalidate), and on
+		 * this port it does not: a full-screen app renders frame after
+		 * frame and the screen stays on the one SurfaceFlinger last
+		 * composed. It comes alive the moment any system window is on
+		 * screen, because WindowManager's transactions then drive
+		 * composition instead -- pull the notification shade down over a
+		 * game and the game animates behind it.
+		 *
+		 * Until the cause is found, ask SurfaceFlinger to recomposite
+		 * while the screen is known to be changing: for up to
+		 * EINK_NUDGE_IDLE_US after the last update that actually altered
+		 * the panel, and only if it has not composited very recently. An
+		 * animating app keeps renewing that window; a still screen stops
+		 * producing changes, the window lapses, and this goes quiet, so
+		 * an idle device is not woken at all.
+		 */
+		if (hw->procs && hw->procs->invalidate && g_last_change_us) {
+			unsigned long nowu = now_us();
+
+			if (nowu - g_last_change_us < EINK_NUDGE_IDLE_US &&
+					nowu - g_last_set_us > EINK_NUDGE_QUIET_US) {
+				g_nudges++;
+				hw->procs->invalidate(hw->procs);
+			}
+		}
+
 		/* Status even when nothing is composing: "frames stopped" and
 		 * "frames are identical" look the same on an e-ink panel. */
 		if ((tick % 50) == 0 && tick != 0)
 			ALOGI("hwcomposer_eink: status sets=%d composed=%lu updates=%lu "
-				"identical=%lu vsyncs=%lu eventControl=%lu enabled=%d",
+				"identical=%lu vsyncs=%lu eventControl=%lu nudges=%lu enabled=%d",
 				g_set_count, g_frames_composed, g_updates_sent,
 				g_frames_identical, g_vsync_events, g_eventcontrol_count,
-				hw->vsync_enabled);
+				g_nudges, hw->vsync_enabled);
 	}
 	return NULL;
 }

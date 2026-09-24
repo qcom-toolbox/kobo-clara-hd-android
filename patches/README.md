@@ -206,6 +206,38 @@ of `/system` in this image): see `swiftshader/device/` for the
 enable/revert scripts (`su -c` takes a single argument, so each is wrapped
 in a one-line script).
 
+## adb stays up (`usb_adb_watch.sh`)
+
+The gadget is configured once at boot by `usb_adb_setup.sh`. What is not
+stable is `adbd` itself: `init.usb.rc` carries
+
+```
+on property:sys.usb.config=none
+    stop adbd
+```
+
+and this port sets exactly that, because the `android_usb` sysfs interface
+those rules drive does not exist on this kernel. Whether that trigger fires
+before or after the setup script's own `start adbd` is a race decided by how
+the rest of boot happens to be scheduled -- preloading six more apps was
+enough to lose it.
+
+When adbd loses, nothing opens `/dev/usb-ffs/adb/ep0` to write the FunctionFS
+descriptors, so the gadget never binds to the UDC and the device does not
+appear on the host's USB bus at all -- no "unauthorized" device, nothing.
+The evidence is in `/usb_adb_setup.log`:
+
+```
+diag t=16s init.svc.adbd=stopped sys.usb.config=none
+-rw------- shell shell 0 ep0        <- no ep1/ep2: descriptors never written
+```
+
+`usb_adb_watch.sh` runs as an init service and simply checks: if adbd is not
+running it starts it, and if the UDC came unbound while adbd has its
+descriptors written it binds it again. That also recovers the case where
+something stops adbd later -- turning "USB debugging" on in Settings does
+exactly that.
+
 ## WiFi (RTL8189FS)
 
 > **Rebuilding the kernel means rebuilding the modules.** This kernel has

@@ -169,6 +169,13 @@ service oomprotect /system/bin/sh /system/bin/oom_protect.sh
     class main
     user root
 
+# Keep adb alive: init.usb.rc stops adbd on sys.usb.config=none, which is
+# what this port sets, and whether that fires before or after
+# usb_adb_setup.sh's own "start adbd" is a race. See usb_adb_watch.sh.
+service usb_adb_watch /system/bin/sh /usb_adb_watch.sh
+    class main
+    user root
+
 # E-ink: pin the animation scales once boot has settled.
 service noanim /system/bin/sh /system/bin/disable_anim.sh
     class main

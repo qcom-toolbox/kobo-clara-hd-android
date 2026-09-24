@@ -39,6 +39,7 @@ install -m 755 "$ROOT/tolino-fw/android_root/svcmgr_wrapper.sh" "$OVERLAY/svcmgr
 
 # --- usb adb (configfs + FunctionFS) --------------------------------------
 install -m 755 "$ROOT/tolino-fw/android_root/usb_adb_setup.sh" "$OVERLAY/usb_adb_setup.sh"
+install -m 755 "$ROOT/tolino-fw/android_root/usb_adb_watch.sh" "$OVERLAY/usb_adb_watch.sh"
 
 # --- apps ------------------------------------------------------------------
 install -m 644 "$WORK/apps/SystemUI.apk"  "$OVERLAY/system/priv-app/SystemUI.apk"

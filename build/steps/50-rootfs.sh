@@ -58,6 +58,15 @@ done
 rm -f "$OVERLAY/system/priv-app/EPubProd.apk" "$OVERLAY/system/priv-app/EPubProd.odex" \
 	"$OVERLAY/system/app/SystemCrashReporter.apk" "$OVERLAY/system/app/SystemCrashReporter.odex"
 
+# Netronix's messaging app: there is no telephony on this device, so it has
+# nothing to message with. (ntx.PowerEnhance stays -- it is part of how this
+# board sleeps.)
+rm -f "$OVERLAY/system/app/MsgE6.apk" "$OVERLAY/system/app/MsgE6.odex"
+
+# Tolino's boot animation. With no zip present, bootanimation falls back to
+# AOSP's own "ANDROID" animation, which is what this port should look like.
+rm -f "$OVERLAY/system/media/bootanimation.zip"
+
 # --- root shell for adb ----------------------------------------------------
 install -m 755 "$WORK/su" "$OVERLAY/system/xbin/su"   # ownership fixed in 70-image.sh
 

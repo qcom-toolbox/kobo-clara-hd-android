@@ -35,6 +35,9 @@
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/syscall.h>
+
+#define gettid() syscall(__NR_gettid)
 #include <errno.h>
 #include <dlfcn.h>
 #include <pthread.h>
@@ -174,13 +177,46 @@ static void eink_send_update(int fd, int panel_width, int left, int top,
 		ALOGE("hwcomposer_eink: MXCFB_SEND_UPDATE failed: %s", strerror(errno));
 }
 
-static int g_prepare_count;
-static int g_set_count;
+static volatile int g_prepare_count;
+static volatile int g_set_count;
 static unsigned long g_frames_composed, g_updates_sent, g_frames_identical;
 static unsigned long g_compose_us, g_update_us;
 static unsigned long g_vsync_events, g_eventcontrol_count, g_nudges;
+static unsigned long g_blank_count, g_prepare_composites;
+static int g_last_blank = -1, g_last_prepare_layers;
 /* When a composed frame last changed the panel, and when set() last ran. */
 static unsigned long g_last_change_us, g_last_set_us;
+
+/*
+ * A file descriptor handed to SurfaceFlinger as the display's retire fence.
+ *
+ * SurfaceFlinger re-enables hardware vsync only from postComposition():
+ *
+ *     if (presentFence->isValid()) {
+ *         if (mPrimaryDispSync.addPresentFence(presentFence))
+ *             enableHardwareVsync();
+ *         else
+ *             disableHardwareVsync(false);
+ *     }
+ *
+ * With retireFenceFd left at -1 that whole branch is skipped. SurfaceFlinger
+ * disables hardware vsync once at boot (it needs no events while nothing is
+ * listening) and then has no path back: our vsync samples are ignored because
+ * mPrimaryHWVsyncEnabled is false, DispSync's timing model never forms, no
+ * software vsync is generated, and every app's Choreographer falls back to
+ * EventThread's 1000 ms fake-vsync timeout. That is the one-frame-per-second
+ * "frozen" display, and why any window that forces a WindowManager
+ * transaction made it move again.
+ *
+ * The right fence comes from the sync framework; this kernel is not built
+ * with CONFIG_SW_SYNC_USER, so /dev/sw_sync does not exist (see ROADMAP).
+ * Until it is, this is a plain descriptor: valid, so the branch runs, and not
+ * a sync fence, so Fence::getSignalTime() fails and DispSync treats the frame
+ * as having an unknown present time. The consequence is that it keeps asking
+ * for hardware vsync, which on this device is exactly right -- the composer's
+ * own 10 Hz thread is the only clock there is.
+ */
+static int g_fence_src = -1;
 
 static unsigned long now_us(void)
 {
@@ -190,11 +226,50 @@ static unsigned long now_us(void)
 	return (unsigned long)ts.tv_sec * 1000000UL + (unsigned long)ts.tv_nsec / 1000UL;
 }
 
+/* How long set() may be missing before prepare() composes the frame itself. */
+#define EINK_SET_MISSING_US 300000UL
+
+static int hwc_compose(hwc_composer_device_1_t *dev, size_t numDisplays,
+		hwc_display_contents_1_t **displays, int from_set);
+
 static int hwc_prepare(hwc_composer_device_1_t *dev, size_t numDisplays,
 		hwc_display_contents_1_t **displays)
 {
+	g_last_prepare_layers = (numDisplays > 0 && displays[0]) ?
+			(int)displays[0]->numHwLayers : -1;
 	(void)dev;
 	g_prepare_count++;
+	if (g_prepare_count <= 10 || (g_prepare_count % 25) == 0) {
+		{
+			static unsigned long last_prep_us;
+			unsigned long nowu = now_us();
+
+			ALOGI("hwcomposer_eink: prepare #%d pid=%d tid=%d sets=%d "
+				"caller=%p dt=%lums set_age=%lums",
+				g_prepare_count, (int)getpid(), (int)gettid(), g_set_count,
+				__builtin_return_address(0),
+				last_prep_us ? (nowu - last_prep_us) / 1000 : 0,
+				g_last_set_us ? (nowu - g_last_set_us) / 1000 : 0);
+			last_prep_us = nowu;
+		}
+		for (size_t d = 0; d < numDisplays; d++) {
+			if (!displays[d]) {
+				ALOGI("hwcomposer_eink:   disp %zu = NULL", d);
+				continue;
+			}
+			ALOGI("hwcomposer_eink:   disp %zu flags=0x%08x numHwLayers=%zu retireFd=%d",
+				d, displays[d]->flags, displays[d]->numHwLayers,
+				displays[d]->retireFenceFd);
+			for (size_t i = 0; i < displays[d]->numHwLayers; i++) {
+				hwc_layer_1_t *ly = &displays[d]->hwLayers[i];
+
+				ALOGI("hwcomposer_eink:     layer %zu type=%d flags=0x%x handle=%p "
+					"frame=(%d,%d)-(%d,%d)", i, ly->compositionType, ly->flags,
+					(void*)ly->handle, ly->displayFrame.left, ly->displayFrame.top,
+					ly->displayFrame.right, ly->displayFrame.bottom);
+			}
+		}
+	}
 	if (g_prepare_count <= 10 || (g_prepare_count % 100) == 0) {
 		for (size_t d = 0; d < numDisplays; d++) {
 			if (displays[d])
@@ -216,6 +291,14 @@ static int hwc_prepare(hwc_composer_device_1_t *dev, size_t numDisplays,
 			l->hints = 0;
 		}
 	}
+
+	/* See hwc_compose(): SurfaceFlinger goes through long stretches of
+	 * calling prepare() without ever calling set(), which leaves the panel
+	 * showing the last frame it did compose while an app renders on. When
+	 * that happens, compose here instead of letting the display sit dead. */
+	if (g_last_set_us && now_us() - g_last_set_us > EINK_SET_MISSING_US)
+		hwc_compose(dev, numDisplays, displays, 0);
+
 	return 0;
 }
 
@@ -495,8 +578,19 @@ static int compose_layer(eink_hwc_t *hw, hwc_layer_1_t *l)
 	return 0;
 }
 
-static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
-		hwc_display_contents_1_t **displays)
+/*
+ * The body of set(), also reachable from prepare().
+ *
+ * SurfaceFlinger is supposed to call prepare() and set() as a pair, and for
+ * long stretches on this device it calls only prepare(): the display then
+ * holds whatever was last composed while an app renders away (measured:
+ * hundreds of prepares, set_age climbing past 35 s). Rather than leave the
+ * panel frozen, compose from prepare() when set() has gone missing --
+ * `from_set` says which caller we are, because only a real set() may hand
+ * SurfaceFlinger a retire fence and count towards the frame statistics.
+ */
+static int hwc_compose(hwc_composer_device_1_t *dev, size_t numDisplays,
+		hwc_display_contents_1_t **displays, int from_set)
 {
 	eink_hwc_t *hw = (eink_hwc_t *)dev;
 	/* Log the full layer list for the first few frames and again whenever
@@ -511,7 +605,14 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 
 	unsigned long t_enter = now_us();
 
-	g_set_count++;
+	if (from_set)
+		g_set_count++;
+	else
+		g_prepare_composites++;
+	if (from_set && (g_set_count <= 10 || (g_set_count % 25) == 0))
+		ALOGI("hwcomposer_eink: set #%d pid=%d tid=%d caller=%p",
+			g_set_count, (int)getpid(), (int)gettid(),
+			__builtin_return_address(0));
 	verbose = g_set_count <= 10 ||
 		(num_primary != last_num_layers && layer_set_logs < 40);
 	if (num_primary != last_num_layers) {
@@ -652,7 +753,7 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 			/* Heartbeat: enough to tell "nothing reaches the
 			 * composer" from "frames arrive and are identical",
 			 * which look the same on a panel that is not changing. */
-			if ((g_set_count % 256) == 0) {
+			if ((g_set_count % 64) == 0) {
 				static unsigned long last_log_us, last_composed;
 				unsigned long nowu = now_us();
 				unsigned long dt = nowu - last_log_us;
@@ -671,7 +772,11 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 				last_composed = g_frames_composed;
 			}
 		}
-		list->retireFenceFd = -1;
+		/* dup per frame: SurfaceFlinger owns and closes what it gets. It
+		 * only reads this after set(), so never leave one behind when
+		 * composing from prepare() -- that descriptor would leak. */
+		if (from_set)
+			list->retireFenceFd = (g_fence_src >= 0) ? dup(g_fence_src) : -1;
 	}
 	return 0;
 }
@@ -701,9 +806,21 @@ static int hwc_eventControl(hwc_composer_device_1_t *dev, int disp, int event, i
 	return 0;
 }
 
+static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
+		hwc_display_contents_1_t **displays)
+{
+	return hwc_compose(dev, numDisplays, displays, 1);
+}
+
 static int hwc_blank(hwc_composer_device_1_t *dev, int disp, int blank)
 {
-	(void)dev; (void)disp; (void)blank;
+	(void)dev;
+	/* SurfaceFlinger stops compositing a display it believes is blanked,
+	 * so record it: a stuck blank looks exactly like a frozen screen. */
+	if (disp == HWC_DISPLAY_PRIMARY) {
+		g_blank_count++;
+		g_last_blank = blank;
+	}
 	return 0;
 }
 
@@ -769,6 +886,7 @@ static void *vsync_thread_main(void *arg)
 	eink_hwc_t *hw = (eink_hwc_t *)arg;
 	struct timespec ts;
 	int tick = 0;
+	int loops = 0;
 	int logged_wait = 0;
 	while (!hw->stop_vsync) {
 		usleep(EINK_VSYNC_PERIOD_NS / 1000);
@@ -776,7 +894,26 @@ static void *vsync_thread_main(void *arg)
 		 * SurfaceFlinger builds its model out of these. */
 		clock_gettime(CLOCK_MONOTONIC, &ts);
 		int64_t now_ns = (int64_t)ts.tv_sec * 1000000000LL + ts.tv_nsec;
-		if ((hw->vsync_enabled || hw->vsync_requested) && hw->procs && hw->procs->vsync) {
+		/*
+		 * Free-running: deliver every tick, whether or not SurfaceFlinger
+		 * currently has vsync "enabled".
+		 *
+		 * Waiting to be asked deadlocked the display. SurfaceFlinger's
+		 * DispSync builds its timing model out of these samples and then
+		 * generates the software vsync that drives both composition and
+		 * every app's Choreographer. With delivery gated on eventControl
+		 * it got one sample in a whole boot (eventControl was called
+		 * twice), so the model never formed, no software vsync was ever
+		 * generated, and nothing asked for hardware vsync either --
+		 * each waiting for the other. The panel then only moved when a
+		 * WindowManager transaction forced a composite, which is why a
+		 * game froze unless the notification shade was on screen.
+		 *
+		 * An unconditional 10 Hz tick is what a composer without real
+		 * vsync hardware is supposed to provide, and it costs one
+		 * wakeup per 100 ms.
+		 */
+		if (hw->procs && hw->procs->vsync) {
 			hw->vsync_requested = 0;
 			hw->procs->vsync(hw->procs, HWC_DISPLAY_PRIMARY, now_ns);
 			tick++;
@@ -824,13 +961,18 @@ static void *vsync_thread_main(void *arg)
 		}
 
 		/* Status even when nothing is composing: "frames stopped" and
-		 * "frames are identical" look the same on an e-ink panel. */
-		if ((tick % 50) == 0 && tick != 0)
+		 * "frames are identical" look the same on an e-ink panel. Count
+		 * loop iterations, not delivered vsyncs -- a stall stops the
+		 * deliveries, which is precisely when this needs to report. */
+		if ((++loops % 50) == 0)
 			ALOGI("hwcomposer_eink: status sets=%d composed=%lu updates=%lu "
-				"identical=%lu vsyncs=%lu eventControl=%lu nudges=%lu enabled=%d",
+				"identical=%lu vsyncs=%lu eventControl=%lu nudges=%lu enabled=%d "
+				"prepares=%lu prep_layers=%d blanks=%lu last_blank=%d prep_composites=%lu",
 				g_set_count, g_frames_composed, g_updates_sent,
 				g_frames_identical, g_vsync_events, g_eventcontrol_count,
-				g_nudges, hw->vsync_enabled);
+				g_nudges, hw->vsync_enabled,
+				(unsigned long)g_prepare_count, g_last_prepare_layers,
+				g_blank_count, g_last_blank, g_prepare_composites);
 	}
 	return NULL;
 }
@@ -933,6 +1075,14 @@ static int hwc_device_open(const hw_module_t *module, const char *name, hw_devic
 	hw->device.registerProcs = hwc_registerProcs;
 	hw->device.getDisplayConfigs = hwc_getDisplayConfigs;
 	hw->device.getDisplayAttributes = hwc_getDisplayAttributes;
+
+	/* See g_fence_src: SurfaceFlinger needs a valid retire fence to keep
+	 * hardware vsync alive. Prefer the real thing if this kernel has it. */
+	g_fence_src = open("/dev/sw_sync", O_RDWR);
+	if (g_fence_src < 0)
+		g_fence_src = open("/dev/null", O_RDONLY);
+	if (g_fence_src < 0)
+		ALOGE("hwcomposer_eink: no retire fence fd: %s", strerror(errno));
 
 	pthread_create(&hw->vsync_thread, NULL, vsync_thread_main, hw);
 

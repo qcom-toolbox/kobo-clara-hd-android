@@ -208,6 +208,14 @@ in a one-line script).
 
 ## WiFi (RTL8189FS)
 
+> **Rebuilding the kernel means rebuilding the modules.** This kernel has
+> `CONFIG_MODVERSIONS`, so `sdio_wifi_pwr.ko` and `8189fs.ko` carry the symbol
+> CRCs of the tree they were compiled against and `insmod` rejects them
+> against any other. Nothing in logcat says so: the WiFi toggle stays on
+> (`wifi_on=1`), `WifiStateMachine` sits in `UninitializedState`, and
+> `lsmod` simply never lists either module. The build rebuilds the driver
+> whenever `Module.symvers` is newer than the last `8189fs.ko`.
+
 The vendor `/system/wifi/8189fs.ko` targets Tolino's 3.0.35 kernel. It is
 replaced by the open-source `rtl8189fs` driver built against this 4.1.15
 tree (`patches/wifi/`: `build.sh`, and a one-line Makefile patch: its

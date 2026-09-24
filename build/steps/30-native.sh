@@ -17,7 +17,14 @@ if old in s:
     open(p, 'w').write(s.replace(old, new))
     print('    patched rtl8189fs Makefile')
 PY
-if [ ! -f "$D/8189fs.ko" ]; then
+# Rebuild whenever the kernel has been rebuilt since. This kernel is built
+# with CONFIG_MODVERSIONS, so a module carries the symbol CRCs of the tree it
+# was compiled against and insmod refuses it against any other -- silently, as
+# far as userspace is concerned. A stale 8189fs.ko simply means no WiFi: the
+# driver never loads, WifiStateMachine sits in UninitializedState, and nothing
+# in logcat says why.
+if [ ! -f "$D/8189fs.ko" ] || [ "$DEPS/kernel/Module.symvers" -nt "$D/8189fs.ko" ]; then
+	rm -f "$D/8189fs.ko"
 	make -C "$D" -j"$(nproc)" ARCH=arm CROSS_COMPILE="$CROSS" KSRC="$DEPS/kernel" \
 		USER_EXTRA_CFLAGS="-DCONFIG_LITTLE_ENDIAN -Wno-error" modules \
 		>"$WORK/wifi-build.log" 2>&1 || die "wifi driver build failed, see $WORK/wifi-build.log"

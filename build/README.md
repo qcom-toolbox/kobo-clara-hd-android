@@ -46,7 +46,7 @@ All of it freely redistributable, into `build/deps`:
 - SwiftShader at the last revision with an Android GLES build, plus this
   port's patches for the Cortex-A9
 - The `rtl8189fs` WiFi driver source
-- Ghost Commander and Shattered Pixel Dungeon from F-Droid
+- Ghost Commander from F-Droid
 
 It needs roughly 15 GB of disk and, on a normal laptop, the better part of
 an hour — the kernel and SwiftShader dominate.

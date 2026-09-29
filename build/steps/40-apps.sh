@@ -122,5 +122,4 @@ info "Gallery.apk re-signed"
 
 # --- third-party apps ------------------------------------------------------
 cp "$DEPS/apks/GhostCommander.apk" "$WORK/apps/GhostCommander.apk"
-cp "$DEPS/apks/ShatteredPixelDungeon.apk" "$WORK/apps/ShatteredPixelDungeon.apk"
 info "apps ready: $(ls "$WORK/apps" | tr '\n' ' ')"

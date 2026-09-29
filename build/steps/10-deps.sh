@@ -60,8 +60,6 @@ fi
 
 # --- preloaded third-party apps (F-Droid) ---------------------------------
 fetch "https://f-droid.org/archive/com.ghostsq.commander_420.apk" "$DEPS/apks/GhostCommander.apk"
-fetch "https://f-droid.org/archive/com.shatteredpixel.shatteredpixeldungeon_340.apk" \
-	"$DEPS/apks/ShatteredPixelDungeon.apk"
 
 # Exported for the later steps.
 export SMALI_CP="$DEPS/jars/baksmali.jar:$DEPS/jars/smali.jar:$DEPS/jars/dexlib2.jar:$DEPS/jars/util.jar:$DEPS/jars/guava.jar:$DEPS/jars/failureaccess.jar:$DEPS/jars/jcommander.jar:$DEPS/jars/antlr-runtime.jar"

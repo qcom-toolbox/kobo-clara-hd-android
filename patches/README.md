@@ -343,9 +343,12 @@ Two more things were needed before vold would actually mount it:
   vendor's own `webviewchromium`).
 - `GhostCommander.apk` — Ghost Commander 1.60.4b5 (F-Droid archive), the
   last release with `minSdkVersion 19`.
-- `ShatteredPixelDungeon.apk` — 0.7.2d (F-Droid archive, `minSdk 8`,
-  armeabi): a real libGDX/GLES 2.0 game, and the end-to-end test that
-  SwiftShader actually runs games on this hardware.
+
+No game is preloaded any more. Shattered Pixel Dungeon (0.7.2d from the
+F-Droid archive, `minSdk 8`, armeabi) was the end-to-end proof that
+SwiftShader runs a real libGDX/GLES 2.0 game on this hardware; that is done,
+and an image others install does not need it. It installs like any other APK
+if you want it back.
 
 ## Vendor apps are load-bearing
 

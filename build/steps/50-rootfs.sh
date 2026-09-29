@@ -50,7 +50,7 @@ rm -f "$OVERLAY/system/priv-app/SystemUI.odex" "$OVERLAY/system/priv-app/Keyguar
 install -m 644 "$WORK/apps/CalendarProvider.apk" "$OVERLAY/system/priv-app/CalendarProvider.apk"
 # Stock AOSP apps this device can actually use. No Music, SoundRecorder or
 # PicoTts: the Clara HD has no audio hardware at all.
-for a in Browser FrontLight GhostCommander ShatteredPixelDungeon \
+for a in Browser FrontLight GhostCommander \
          Calculator DeskClock Calendar Email Gallery; do
 	install -m 644 "$WORK/apps/$a.apk" "$OVERLAY/system/app/$a.apk"
 done

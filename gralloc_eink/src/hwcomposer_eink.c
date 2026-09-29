@@ -103,6 +103,13 @@ typedef struct {
 	pthread_t vsync_thread;
 	volatile int vsync_enabled;
 	volatile int vsync_requested;
+	/* Set between blank(1) and blank(0). While the display is blanked the
+	 * panel is powered down, and everything this composer does to it --
+	 * writing the framebuffer, and above all MXCFB_SEND_UPDATE -- is done
+	 * to hardware that is not there. */
+	volatile int blanked;
+	/* Repaint the whole panel on the first frame after waking. */
+	volatile int force_full;
 	int stop_vsync;
 } eink_hwc_t;
 
@@ -304,7 +311,8 @@ static int hwc_prepare(hwc_composer_device_1_t *dev, size_t numDisplays,
 	 * calling prepare() without ever calling set(), which leaves the panel
 	 * showing the last frame it did compose while an app renders on. When
 	 * that happens, compose here instead of letting the display sit dead. */
-	if (g_last_set_us && now_us() - g_last_set_us > EINK_SET_MISSING_US)
+	if (!((eink_hwc_t *)dev)->blanked &&
+			g_last_set_us && now_us() - g_last_set_us > EINK_SET_MISSING_US)
 		hwc_compose(dev, numDisplays, displays, 0);
 
 	return 0;
@@ -636,6 +644,17 @@ static int hwc_compose(hwc_composer_device_1_t *dev, size_t numDisplays,
 			list->retireFenceFd = -1;
 			continue;
 		}
+		/* Blanked: the panel is off. Composing into the framebuffer is
+		 * merely wasted work, but MXCFB_SEND_UPDATE to a powered-down
+		 * EPDC is worse than that, so stop at the door. */
+		if (hw->blanked) {
+			for (size_t i = 0; i < list->numHwLayers; i++)
+				list->hwLayers[i].releaseFenceFd = -1;
+			if (from_set)
+				list->retireFenceFd = (g_fence_src >= 0) ? dup(g_fence_src) : -1;
+			continue;
+		}
+
 		int dirty = 0, composed = 0, failed = 0;
 		/* Union of what this frame actually touches, in panel
 		 * coordinates, so the update can be a partial one. */
@@ -725,7 +744,8 @@ static int hwc_compose(hwc_composer_device_1_t *dev, size_t numDisplays,
 			 * frame, so anything the update leaves out keeps its old
 			 * contents on the panel; a periodic full update also
 			 * clears the ghosting partial updates leave behind. */
-			full = (updates % EINK_FULL_UPDATE_EVERY) == 0;
+			full = (updates % EINK_FULL_UPDATE_EVERY) == 0 || hw->force_full;
+			hw->force_full = 0;
 			if (full) {
 				dx0 = 0; dy0 = 0; dx1 = hw->width; dy1 = hw->height;
 			}
@@ -833,12 +853,17 @@ static int hwc_set(hwc_composer_device_1_t *dev, size_t numDisplays,
 
 static int hwc_blank(hwc_composer_device_1_t *dev, int disp, int blank)
 {
-	(void)dev;
 	/* SurfaceFlinger stops compositing a display it believes is blanked,
 	 * so record it: a stuck blank looks exactly like a frozen screen. */
 	if (disp == HWC_DISPLAY_PRIMARY) {
+		eink_hwc_t *hw = (eink_hwc_t *)dev;
+
 		g_blank_count++;
 		g_last_blank = blank;
+		hw->blanked = blank ? 1 : 0;
+		if (!blank)
+			hw->force_full = 1;
+		ALOGI("hwcomposer_eink: blank(%d)", blank);
 	}
 	return 0;
 }
@@ -969,7 +994,7 @@ static void *vsync_thread_main(void *arg)
 		 * producing changes, the window lapses, and this goes quiet, so
 		 * an idle device is not woken at all.
 		 */
-		if (hw->procs && hw->procs->invalidate && g_last_change_us) {
+		if (!hw->blanked && hw->procs && hw->procs->invalidate && g_last_change_us) {
 			unsigned long nowu = now_us();
 
 			if (nowu - g_last_change_us < EINK_NUDGE_IDLE_US &&

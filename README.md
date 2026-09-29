@@ -155,7 +155,7 @@ Raw sector offsets the Kobo/Netronix U-Boot reads (see
 | --- | --- |
 | 1285 / 1286 | DTB header / payload |
 | 2047 / 2048 | kernel header / payload |
-| 1097730 | `android_root` ext4 partition (1 GB) |
+| 1097730 | `android_root` ext4 partition (4 GiB; p3 holds 6.8 GiB) |
 | 15491072 | Android's storage (FAT32, fills the card) |
 
 The image stops before the storage partition, so re-flashing keeps whatever
@@ -164,7 +164,7 @@ ext4 driver does not understand:
 
 ```sh
 mke2fs -F -t ext4 -O ^has_journal,^metadata_csum,^64bit,^metadata_csum_seed \
-  -d tolino-fw/android_root android_root_new.img 1024M
+  -d tolino-fw/android_root android_root_new.img 4096M
 ```
 
 Native pieces are built with the NDK r10e bionic toolchain (sysroot

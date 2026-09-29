@@ -11,8 +11,13 @@ P4_SECTOR=15491072      # first 2048-aligned sector after p3
 
 info "building the ext4 root filesystem"
 rm -f "$WORK/android_root.img"
+# 4 GiB: /system is about 700 MB of it and the rest is /data. 1 GiB was
+# enough to boot and little else -- installing a handful of apps, and the
+# dexopt that comes with them, filled it. p3 runs from sector 1097730 to
+# 15491070, so it has room for 6.8 GiB; this leaves headroom without pushing
+# the image up against p4.
 mke2fs -F -t ext4 -O ^has_journal,^metadata_csum,^64bit,^metadata_csum_seed \
-	-d "$OVERLAY" "$WORK/android_root.img" 1024M >/dev/null 2>&1 \
+	-d "$OVERLAY" "$WORK/android_root.img" 4096M >/dev/null 2>&1 \
 	|| die "mke2fs failed"
 
 # su must be setuid root but runnable only by the adb shell (group shell).

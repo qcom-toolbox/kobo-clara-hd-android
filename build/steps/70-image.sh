@@ -11,13 +11,19 @@ P4_SECTOR=15491072      # first 2048-aligned sector after p3
 
 info "building the ext4 root filesystem"
 rm -f "$WORK/android_root.img"
-# Fill p3. /system is about 700 MB of it and the rest is /data, and 1 GiB was
-# enough to boot and little else -- installing a handful of apps, and the
-# dexopt that comes with them, filled it. p3 runs from the rootfs sector up to
-# p4, so derive the size from those two rather than hardcoding it; flooring to
-# whole MiB leaves ~1 MiB spare at the end of the partition.
-ROOTFS_MIB=$(( (P4_SECTOR - ROOTFS_SECTOR) * 512 / 1048576 ))
-info "root filesystem: ${ROOTFS_MIB} MiB (fills p3)"
+# /system is about 700 MB of this and the rest is /data. 1 GiB was enough to
+# boot and little else -- installing a handful of apps, and the dexopt that
+# comes with them, filled it -- so the default fills p3, derived from the two
+# sector constants rather than hardcoded (flooring to whole MiB leaves ~1 MiB
+# spare at the end of the partition). BUILD_ROOTFS_MIB overrides it.
+P3_MIB=$(( (P4_SECTOR - ROOTFS_SECTOR) * 512 / 1048576 ))
+if [ "${ROOTFS_MIB:-fill}" = fill ]; then
+	ROOTFS_MIB=$P3_MIB
+	info "root filesystem: ${ROOTFS_MIB} MiB (fills p3)"
+else
+	[ "$ROOTFS_MIB" -le "$P3_MIB" ] || die "root filesystem ${ROOTFS_MIB} MiB does not fit p3 (${P3_MIB} MiB)"
+	info "root filesystem: ${ROOTFS_MIB} MiB (p3 holds ${P3_MIB} MiB)"
+fi
 mke2fs -F -t ext4 -O ^has_journal,^metadata_csum,^64bit,^metadata_csum_seed \
 	-d "$OVERLAY" "$WORK/android_root.img" "${ROOTFS_MIB}M" >/dev/null 2>&1 \
 	|| die "mke2fs failed"

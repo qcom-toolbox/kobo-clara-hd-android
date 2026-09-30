@@ -123,6 +123,10 @@ BUILD_CARD_SECTORS=124735488 \
 ./build/build.sh
 ```
 
+By default the Android root filesystem fills its partition (7027 MiB), which
+is what gives apps room. `BUILD_ROOTFS_MIB=4096` (or any size in MiB) builds
+a smaller one if you would rather move a smaller image around.
+
 It downloads the rest (toolchains, SDK, the Kobo GPL kernel, SwiftShader,
 the WiFi driver, stock AOSP apps) — roughly 15 GB and an hour. See
 [`README.md`](README.md) in this directory for the host packages, the

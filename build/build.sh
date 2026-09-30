@@ -11,7 +11,8 @@
 # See build/README.md for how to obtain the two inputs.
 #
 # Non-interactive use: set the variables and run.
-#   BUILD_VENDOR_ROOT=... BUILD_BASE_IMAGE=... BUILD_CARD_SECTORS=... ./build/build.sh
+#   BUILD_VENDOR_ROOT=... BUILD_BASE_IMAGE=... BUILD_CARD_SECTORS=... \
+#   [BUILD_ROOTFS_MIB=4096] ./build/build.sh
 set -eu
 
 BUILD_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -26,12 +27,14 @@ need java javac keytool python3 curl unzip zip tar git make cmake ninja \
 ask BUILD_VENDOR_ROOT  "Path to the Tolino firmware's android_root directory"
 ask BUILD_BASE_IMAGE   "Path to the base Kobo SD card image"
 ask BUILD_CARD_SECTORS "Size of the target SD card in 512-byte sectors (cat /sys/block/sdX/size)"
+ask BUILD_ROOTFS_MIB   "Size of the Android root filesystem in MiB (blank = fill p3)" "fill"
 ask BUILD_OUT          "Output image path" "$ROOT/Kobo_clara-hd.img"
 ask BUILD_WORK         "Scratch directory" "$ROOT/build/work"
 
 VENDOR_ROOT=$BUILD_VENDOR_ROOT
 BASE_IMAGE=$BUILD_BASE_IMAGE
 CARD_SECTORS=$BUILD_CARD_SECTORS
+ROOTFS_MIB=$BUILD_ROOTFS_MIB
 OUT_IMAGE=$BUILD_OUT
 WORK=$BUILD_WORK
 DEPS=${BUILD_DEPS:-$ROOT/build/deps}
@@ -45,8 +48,23 @@ case "$CARD_SECTORS" in
 esac
 [ "$CARD_SECTORS" -gt 15491072 ] || die "the card is too small (needs to be larger than ~8 GB)"
 
+# The root filesystem: "fill" (the default) uses all of p3, or give a size in
+# MiB to leave the rest of the partition unused -- a smaller image is quicker
+# to write and to copy about, at the cost of space for apps and their dexopt
+# output. p3 holds 7027 MiB; /system is about 700 MB of whatever you pick.
+case "$ROOTFS_MIB" in
+	fill|'') ROOTFS_MIB=fill ;;
+	*[!0-9]*) die "root filesystem size must be a number of MiB, or \"fill\"" ;;
+	*)
+		[ "$ROOTFS_MIB" -ge 900 ] \
+			|| die "$ROOTFS_MIB MiB is too small: /system alone is about 700 MB"
+		[ "$ROOTFS_MIB" -le 7027 ] \
+			|| die "$ROOTFS_MIB MiB does not fit in p3 (7027 MiB)"
+		;;
+esac
+
 mkdir -p "$WORK" "$DEPS"
-export BUILD_DIR ROOT WORK DEPS VENDOR_ROOT BASE_IMAGE CARD_SECTORS OUT_IMAGE OVERLAY
+export BUILD_DIR ROOT WORK DEPS VENDOR_ROOT BASE_IMAGE CARD_SECTORS ROOTFS_MIB OUT_IMAGE OVERLAY
 
 # Each step is a separate script so a failed build can be resumed with
 # BUILD_STEPS="50-rootfs 60-framework 70-image" ./build/build.sh

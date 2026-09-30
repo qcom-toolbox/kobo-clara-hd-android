@@ -98,6 +98,23 @@ BUILD_CARD_SECTORS=124735488 \
 ./build/build.sh
 ```
 
+### Image size
+
+`BUILD_ROOTFS_MIB` sets the size of the Android root filesystem, which is
+what decides how much space `/data` has for apps and their dexopt output. The
+default, `fill`, uses all of p3 (7027 MiB). Give a number instead for a
+smaller image -- quicker to write and to copy about, with the rest of the
+partition left unused:
+
+```sh
+BUILD_ROOTFS_MIB=4096 ... ./build/build.sh     # 4 GiB rootfs
+BUILD_ROOTFS_MIB=fill ... ./build/build.sh     # the default
+```
+
+Below about 900 MiB it will not hold `/system`, and above 7027 MiB it does
+not fit p3; the build refuses both. This does not change the storage
+partition, which always covers the rest of the card.
+
 ## If a step fails
 
 Every patch asserts on the vendor text it expects, so a firmware revision

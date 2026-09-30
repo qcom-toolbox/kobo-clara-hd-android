@@ -61,11 +61,6 @@ fi
 # --- preloaded third-party apps (F-Droid) ---------------------------------
 fetch "https://f-droid.org/archive/com.ghostsq.commander_420.apk" "$DEPS/apks/GhostCommander.apk"
 
-# Exported for the later steps.
-export SMALI_CP="$DEPS/jars/baksmali.jar:$DEPS/jars/smali.jar:$DEPS/jars/dexlib2.jar:$DEPS/jars/util.jar:$DEPS/jars/guava.jar:$DEPS/jars/failureaccess.jar:$DEPS/jars/jcommander.jar:$DEPS/jars/antlr-runtime.jar"
-export CROSS="$DEPS/arm-gcc-8.3/bin/arm-none-linux-gnueabihf-"
-export NDK21="$DEPS/ndk/android-ndk-r21e"
-export NDK10="$DEPS/ndk10/android-ndk-r10e"
-export SDK="$DEPS/sdk/android-4.4.2"
-export BUILD_TOOLS="$DEPS/sdk/android-9"
+# The paths themselves live in build.sh, so that resuming at a later step
+# still has them.
 info "dependencies ready"

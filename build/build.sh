@@ -64,7 +64,19 @@ case "$ROOTFS_MIB" in
 esac
 
 mkdir -p "$WORK" "$DEPS"
+
+# Where 10-deps puts what it fetches. Defined here rather than there so that
+# resuming with BUILD_STEPS works -- picking up at 20-kernel used to die with
+# "CROSS: parameter not set", which made the documented resume useless.
+SMALI_CP="$DEPS/jars/baksmali.jar:$DEPS/jars/smali.jar:$DEPS/jars/dexlib2.jar:$DEPS/jars/util.jar:$DEPS/jars/guava.jar:$DEPS/jars/failureaccess.jar:$DEPS/jars/jcommander.jar:$DEPS/jars/antlr-runtime.jar"
+CROSS="$DEPS/arm-gcc-8.3/bin/arm-linux-gnueabihf-"
+NDK21="$DEPS/ndk/android-ndk-r21e"
+NDK10="$DEPS/ndk10/android-ndk-r10e"
+SDK="$DEPS/sdk/android-4.4.2"
+BUILD_TOOLS="$DEPS/sdk/android-9"
+
 export BUILD_DIR ROOT WORK DEPS VENDOR_ROOT BASE_IMAGE CARD_SECTORS ROOTFS_MIB OUT_IMAGE OVERLAY
+export SMALI_CP CROSS NDK21 NDK10 SDK BUILD_TOOLS
 
 # Each step is a separate script so a failed build can be resumed with
 # BUILD_STEPS="50-rootfs 60-framework 70-image" ./build/build.sh

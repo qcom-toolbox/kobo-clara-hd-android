@@ -79,7 +79,13 @@ say "e-ink hwcomposer / gralloc and su"
 # hardware/* headers from the AOSP 4.4.2 tarballs fetched above.
 TC="$NDK10/toolchains/arm-linux-androideabi-4.8/prebuilt/linux-x86_64/bin"
 SR="$NDK10/platforms/android-19/arch-arm"
-INC="-I $DEPS/kernel/include/uapi -I $WORK/kitkat/libhardware -I $WORK/kitkat/system_core"
+# Only the one kernel header we actually need -- the EPDC update ioctl. The
+# whole uapi tree on the include path shadows the NDK's own asm/ and
+# asm-generic/ headers, and the compile collapses in conflicting sigset_t and
+# struct sigaction definitions.
+mkdir -p "$WORK/kinc/linux"
+cp "$DEPS/kernel/include/uapi/linux/mxcfb.h" "$WORK/kinc/linux/mxcfb.h"
+INC="-I $WORK/kinc -I $WORK/kitkat/libhardware -I $WORK/kitkat/system_core"
 mkdir -p "$WORK/hw"
 
 # hwcomposer: composes all layers itself into the RGB565 panel buffer.

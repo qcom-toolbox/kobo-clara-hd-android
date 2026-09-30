@@ -238,6 +238,38 @@ descriptors written it binds it again. That also recovers the case where
 something stops adbd later -- turning "USB debugging" on in Settings does
 exactly that.
 
+## Building the kernel
+
+Three things the Kobo GPL tarball does not give you, found by running the
+build end to end for the first time:
+
+* **`patches/kernel/config`** — the tarball ships defconfigs
+  (`imx_v7_kobo_defconfig` and friends) but no `.config`, and this port's
+  kernel is none of them: it needs binder, ashmem, the logger,
+  lowmemorykiller and `SDIO_WIFI_PWR=m`. This is the configuration the
+  running kernel was built from; `20-kernel.sh` installs it and runs
+  `olddefconfig` over it.
+
+* **`patches/kernel/compiler.h`** — `__asmeq()` compares the register the
+  compiler picked against the one the code asked for, textually, and emits
+  `.err` when they differ. GCC 8 spells inline-asm register operands
+  differently from what this 4.1 tree expects, so correct code fails in the
+  assembler:
+
+  ```
+  /tmp/ccnlF3aj.s:1111: Error: .err encountered
+  make[1]: *** [kernel/fork.o] Error 1
+  ```
+
+  The macro is an assertion about a gcc bug from 2004 (PR 15089), so it goes.
+
+* **The EPDC waveform.** The config builds it in
+  (`CONFIG_EXTRA_FIRMWARE="imx/epdc/epdc_PENG060D.fw"`) and without it the
+  build stops at `No rule to make target
+  firmware/imx/epdc/epdc_PENG060D.fw`. It is Netronix/E-Ink data, not ours
+  to redistribute, so the build copies it out of the vendor firmware you
+  downloaded (`lib/firmware/imx/epdc/`).
+
 ## WiFi (RTL8189FS)
 
 > **Rebuilding the kernel means rebuilding the modules.** This kernel has

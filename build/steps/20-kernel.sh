@@ -16,10 +16,31 @@ cp "$ROOT/patches/kernel/logger.h"              "$K/drivers/staging/android/logg
 cp "$ROOT/patches/kernel/genhd.c"               "$K/block/genhd.c"
 cp "$ROOT/patches/kernel/partition-generic.c"   "$K/block/partition-generic.c"
 cp "$ROOT/patches/kernel/proc-base.c"           "$K/fs/proc/base.c"
+cp "$ROOT/patches/kernel/compiler.h"            "$K/arch/arm/include/asm/compiler.h"
 cp "$ROOT/patches/kernel/imx6sll-e60k02.dts"    "$K/arch/arm/boot/dts/imx6sll-e60k02.dts"
 
+# The config builds the EPDC waveform into the kernel
+# (CONFIG_EXTRA_FIRMWARE="imx/epdc/epdc_PENG060D.fw"); without it the build
+# stops with "No rule to make target firmware/imx/epdc/epdc_PENG060D.fw".
+# It is Netronix/E-Ink data, not ours to redistribute, and the firmware you
+# downloaded already carries it.
+info "installing the EPDC waveform from the vendor firmware"
+mkdir -p "$K/firmware/imx/epdc"
+cp "$VENDOR_ROOT/lib/firmware/imx/epdc/epdc_PENG060D.fw" "$K/firmware/imx/epdc/" \
+	|| die "no EPDC waveform at $VENDOR_ROOT/lib/firmware/imx/epdc/epdc_PENG060D.fw"
+
 cd "$K"
-[ -f .config ] || die "the Kobo tree ships its own .config; none found in $K"
+# The Kobo GPL tarball ships defconfigs (imx_v7_kobo_defconfig and friends)
+# but no .config, and this port's kernel is not any of them: it needs binder,
+# ashmem, the logger, lowmemorykiller and SDIO_WIFI_PWR=m. The configuration
+# the running kernel was built from is kept in patches/kernel/config, so use
+# that and let olddefconfig fill in anything the tree expects.
+if [ ! -f .config ] || [ "$ROOT/patches/kernel/config" -nt .config ]; then
+	cp "$ROOT/patches/kernel/config" .config
+	make ARCH=arm CROSS_COMPILE="$CROSS" olddefconfig >/dev/null 2>&1 \
+		|| die "olddefconfig failed on patches/kernel/config"
+	info "installed patches/kernel/config"
+fi
 
 if [ ! -f arch/arm/boot/zImage ] || [ "${BUILD_FORCE_KERNEL:-0}" = 1 ]; then
 	info "building zImage (this takes a while)"

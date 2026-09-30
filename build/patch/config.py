@@ -118,6 +118,17 @@ def init_rc():
             'import /init.trace.rc\nimport /init.usb.rc',
             'init.rc: import /init.usb.rc')
 
+    # The vendor remounts / read-only early in boot. On a normal Android
+    # layout that is a small ramdisk root; here root, /system and /data are
+    # one ext4 partition, so it makes the *whole filesystem* read-only and
+    # nothing can boot -- the panel flashes once and stays white.
+    sub(p, '    mount rootfs rootfs / ro remount',
+        '    # (disabled: root and /system are one partition in this port, so this\n'
+        '    # remount made the whole filesystem read-only rather than a small\n'
+        '    # ramdisk root as it would on a normal Android layout.)\n'
+        '    # mount rootfs rootfs / ro remount',
+        'init.rc: do not remount / read-only')
+
     # on boot: wifi power + front light permissions
     text = read(p)
     if 'sdio_wifi_pwr.ko' not in text:

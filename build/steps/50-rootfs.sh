@@ -31,7 +31,9 @@ install -m 644 "$WORK/egl"/*.so "$OVERLAY/system/lib/egl/"
 # --- wifi ------------------------------------------------------------------
 mkdir -p "$OVERLAY/system/wifi" "$OVERLAY/system/lib/modules"
 install -m 644 "$WORK/8189fs.ko" "$OVERLAY/system/wifi/8189fs.ko"
-install -m 644 "$WORK/sdio_wifi_pwr.ko" "$OVERLAY/system/lib/modules/sdio_wifi_pwr.ko"
+for m in sdio_wifi_pwr configfs libcomposite usb_f_fs; do
+	install -m 644 "$WORK/$m.ko" "$OVERLAY/system/lib/modules/$m.ko"
+done
 
 # --- servicemanager --------------------------------------------------------
 install -m 755 "$WORK/servicemanager_new" "$OVERLAY/servicemanager_new"

@@ -28,6 +28,7 @@ ask BUILD_VENDOR_ROOT  "Path to the Tolino firmware's android_root directory"
 ask BUILD_BASE_IMAGE   "Path to the base Kobo SD card image"
 ask BUILD_CARD_SECTORS "Size of the target SD card in 512-byte sectors (cat /sys/block/sdX/size)"
 ask BUILD_ROOTFS_MIB   "Size of the Android root filesystem in MiB (blank = fill p3)" "fill"
+ask BUILD_VENDOR_APPS  "Tolino's own apps: remove or keep" "remove"
 ask BUILD_OUT          "Output image path" "$ROOT/Kobo_clara-hd.img"
 ask BUILD_WORK         "Scratch directory" "$ROOT/build/work"
 
@@ -35,6 +36,7 @@ VENDOR_ROOT=$BUILD_VENDOR_ROOT
 BASE_IMAGE=$BUILD_BASE_IMAGE
 CARD_SECTORS=$BUILD_CARD_SECTORS
 ROOTFS_MIB=$BUILD_ROOTFS_MIB
+VENDOR_APPS=$BUILD_VENDOR_APPS
 OUT_IMAGE=$BUILD_OUT
 WORK=$BUILD_WORK
 DEPS=${BUILD_DEPS:-$ROOT/build/deps}
@@ -63,6 +65,15 @@ case "$ROOTFS_MIB" in
 		;;
 esac
 
+# Tolino's own apps (the reader and the crash reporter). "keep" leaves them
+# installed; removing them is also what leaves AOSP's Launcher2 as the only
+# home app. MsgE6 and PowerEnhance are never removed -- see 50-rootfs.sh.
+case "$VENDOR_APPS" in
+	''|remove) VENDOR_APPS=remove ;;
+	keep) ;;
+	*) die "BUILD_VENDOR_APPS must be \"remove\" or \"keep\"" ;;
+esac
+
 mkdir -p "$WORK" "$DEPS"
 
 # Where 10-deps puts what it fetches. Defined here rather than there so that
@@ -75,7 +86,7 @@ NDK10="$DEPS/ndk10/android-ndk-r10e"
 SDK="$DEPS/sdk/android-4.4.2"
 BUILD_TOOLS="$DEPS/sdk/android-9"
 
-export BUILD_DIR ROOT WORK DEPS VENDOR_ROOT BASE_IMAGE CARD_SECTORS ROOTFS_MIB OUT_IMAGE OVERLAY
+export BUILD_DIR ROOT WORK DEPS VENDOR_ROOT BASE_IMAGE CARD_SECTORS ROOTFS_MIB VENDOR_APPS OUT_IMAGE OVERLAY
 export SMALI_CP CROSS NDK21 NDK10 SDK BUILD_TOOLS
 
 # Each step is a separate script so a failed build can be resumed with

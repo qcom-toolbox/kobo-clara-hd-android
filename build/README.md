@@ -115,6 +115,17 @@ Below about 900 MiB it will not hold `/system`, and above 7027 MiB it does
 not fit p3; the build refuses both. This does not change the storage
 partition, which always covers the rest of the card.
 
+### Tolino's apps
+
+`BUILD_VENDOR_APPS=keep` leaves the vendor's reader (`EPubProd`) and crash
+reporter installed. The default removes them, which is also what leaves AOSP's
+Launcher2 as the home app -- the reader registers as a home activity and then
+waits forever for storage it never gets.
+
+`MsgE6` and `ntx.PowerEnhance` are never removed by either setting: the
+vendor's `ShutdownThread` draws the power-off screen from MsgE6, and
+PowerEnhance is part of how this board sleeps.
+
 ## If a step fails
 
 Every patch asserts on the vendor text it expects, so a firmware revision

@@ -7,6 +7,7 @@ re-running is safe and a different firmware revision fails loudly.
 usage: config.py <android_root>
 """
 import os
+import re
 import sys
 
 ROOT = None
@@ -63,7 +64,10 @@ def default_prop():
     text = '\n'.join(out)
     for key, value in (('ro.secure', '0'), ('ro.debuggable', '1'),
                        ('persist.sys.usb.config', 'none'), ('sys.usb.config', 'none')):
-        if '%s=' % key not in text:
+        # Match at the start of a line: "sys.usb.config=" is a substring of
+        # "persist.sys.usb.config=", so a plain `in text` test thinks it is
+        # already set and sys.usb.config never gets written at all.
+        if not re.search(r'^%s=' % re.escape(key), text, re.M):
             text = text.rstrip('\n') + '\n%s=%s\n' % (key, value)
     write(p, text)
     print('  + default.prop: ro.secure=0, ro.debuggable=1, usb config none')
@@ -218,6 +222,62 @@ def board_rc():
         'init.E60K00.rc: backlight mode')
 
 
+def board_rc_mount_all():
+    """init.E60K00.rc: do not run mount_all.
+
+    fstab.E60K00 describes a real 10-partition Android layout
+    (mmcblk0p5=/system, p6=/cache, p7=/data, p8=/device, p10=/share). None of
+    it exists here -- root, /system and /data are one combined ext4 partition
+    -- so mount_all fails on the very first entry and aborts the action,
+    taking the rest of boot with it. The panel flashes once and stays white,
+    and adb never comes up.
+    """
+    p = path('init.E60K00.rc')
+    if not os.path.exists(p):
+        print('  ! %s missing, skipping mount_all' % p)
+        return
+    sub(p, '    mount_all /fstab.E60K00',
+        '# mount_all disabled: fstab.E60K00 lists a real 10-partition Android\n'
+        '# layout (mmcblk0p5=/system, p6=/cache, p7=/data, p8=/device,\n'
+        '# p10=/share) that does not exist on our card -- root, /system and\n'
+        '# /data are one combined ext4 partition already, mounted by the\n'
+        '# kernel. mount_all fails on the first entry and aborts.\n'
+        '#    mount_all /fstab.E60K00',
+        'init.E60K00.rc: no mount_all')
+
+
+def uncritical():
+    """init.rc: drop "critical" from the services that cannot keep it.
+
+    init reboots into recovery when a critical service dies four times in
+    four minutes. On this port that is a trap rather than a safety net:
+    servicemanager is our own wrapper script, and healthd talks to a battery
+    HAL that is not the one this board has. A reboot into the Kobo's recovery
+    partition looks exactly like a hang -- white screen, no adb -- so the
+    flag comes off everything but ueventd.
+    """
+    p = path('init.rc')
+    for name, block in (
+            ('healthd', 'service healthd /sbin/healthd\n'
+                        '    class core\n'
+                        '    critical\n'),
+            ('healthd-charger', 'service healthd-charger /sbin/healthd -n\n'
+                                '    class charger\n'
+                                '    critical\n'),
+            ('servicemanager', '    group system\n'
+                               '    critical\n'
+                               '    onrestart restart healthd\n'),
+    ):
+        # Not sub(): the patched block is a prefix of the unpatched one, so
+        # an "is the new text already there" test always says yes.
+        text = read(p)
+        if block not in text:
+            print('  = init.rc: %s is not critical (already)' % name)
+            continue
+        write(p, text.replace(block, block.replace('    critical\n', '')))
+        print('  + init.rc: %s is not critical' % name)
+
+
 def fstab():
     """vold matches the volume by sysfs path; the vendor's is the 3.0 one."""
     p = path('fstab.E60K00')
@@ -245,7 +305,9 @@ def main(argv):
     default_prop()
     build_prop()
     init_rc()
+    uncritical()
     board_rc()
+    board_rc_mount_all()
     fstab()
 
 

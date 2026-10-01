@@ -56,10 +56,29 @@ for a in Browser FrontLight GhostCommander \
          Calculator DeskClock Calendar Email Gallery; do
 	install -m 644 "$WORK/apps/$a.apk" "$OVERLAY/system/app/$a.apk"
 done
-# The vendor reader app spins forever waiting for storage it never gets, and
-# it is the default home app; drop it so the launcher comes up.
-rm -f "$OVERLAY/system/priv-app/EPubProd.apk" "$OVERLAY/system/priv-app/EPubProd.odex" \
-	"$OVERLAY/system/app/SystemCrashReporter.apk" "$OVERLAY/system/app/SystemCrashReporter.odex"
+# Tolino's own apps. BUILD_VENDOR_APPS=keep leaves them in place; the default
+# is to remove them, which is also what makes AOSP's Launcher2 the home app:
+# the vendor reader registers as a home activity, spins forever waiting for
+# storage it never gets, and leaves you looking at nothing.
+#
+# They are removed from both app/ and priv-app/ because this firmware does not
+# keep them where you would expect -- EPubProd lives in /system/app here, and
+# the old code only looked in /system/priv-app, so it was never actually
+# removed. Each .odex goes with its .apk.
+#
+# MsgE6 and PowerEnhance are deliberately not in this list whatever the flag
+# says: the vendor's ShutdownThread draws the power-off screen from MsgE6, and
+# PowerEnhance is part of how this board sleeps. See patches/README.md.
+if [ "${VENDOR_APPS:-remove}" = keep ]; then
+	info "keeping Tolino's apps (BUILD_VENDOR_APPS=keep)"
+else
+	for a in EPubProd SystemCrashReporter; do
+		for d in app priv-app; do
+			rm -f "$OVERLAY/system/$d/$a.apk" "$OVERLAY/system/$d/$a.odex"
+		done
+	done
+	info "removed Tolino's apps: EPubProd SystemCrashReporter"
+fi
 
 # Do NOT remove MsgE6 (com.ntx.msg). It looks like a messaging app for a
 # device with no telephony, but the vendor's ShutdownThread draws the

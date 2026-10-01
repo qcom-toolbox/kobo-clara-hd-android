@@ -123,6 +123,15 @@ BUILD_CARD_SECTORS=124735488 \
 ./build/build.sh
 ```
 
+The build also needs the e-ink panel's waveform, and it takes that from the
+base image automatically. It is worth knowing where it comes from: the
+waveform is in none of the firmware you download -- not the Tolino update,
+not Kobo's GPL kernel release, not even the stock root filesystem. It lives
+in a raw region of the card itself, 2686464 bytes at sector 14336, ahead of
+the first partition, which is where the stock kernel reads it from. So the
+copy that ends up in your kernel is your own device's panel data, which is
+also the correct one to use.
+
 By default the Android root filesystem fills its partition (7027 MiB), which
 is what gives apps room. `BUILD_ROOTFS_MIB=4096` (or any size in MiB) builds
 a smaller one if you would rather move a smaller image around.

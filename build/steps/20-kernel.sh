@@ -30,6 +30,9 @@ cp "$ROOT/patches/kernel/imx6sll-e60k02.dts"    "$K/arch/arm/boot/dts/imx6sll-e6
 # stops with "No rule to make target firmware/imx/epdc/epdc_PENG060D.fw".
 # It is Netronix/E-Ink data, not ours to redistribute, and the firmware you
 # downloaded already carries it.
+# Where the waveform sits in the raw card: 2686464 bytes at sector 14336.
+EPDC_SECTOR=14336
+EPDC_SECTORS=5247
 info "installing the EPDC waveform"
 mkdir -p "$K/firmware/imx/epdc"
 FW=
@@ -40,6 +43,24 @@ for c in "$VENDOR_ROOT/lib/firmware/imx/epdc/epdc_PENG060D.fw" \
          "${BUILD_EPDC_FW:-/nonexistent}"; do
 	[ -f "$c" ] && { FW=$c; break; }
 done
+if [ -z "$FW" ] && [ -f "$BASE_IMAGE" ]; then
+	# It is in no firmware archive at all -- not the Tolino update, not the
+	# Kobo GPL tarball, not the stock rootfs. On this hardware the waveform
+	# lives in a raw region of the card itself, at sector 14336, ahead of the
+	# first partition, and that is where the stock kernel reads it from. Carve
+	# it out of the base image: it is that device's own panel data, which also
+	# makes it the correct copy rather than merely an available one.
+	info "carving the EPDC waveform out of $BASE_IMAGE (sector $EPDC_SECTOR)"
+	dd if="$BASE_IMAGE" of="$WORK/epdc_PENG060D.fw" bs=512 \
+		skip=$EPDC_SECTOR count=$EPDC_SECTORS status=none
+	if [ -s "$WORK/epdc_PENG060D.fw" ] &&
+			[ "$(tr -d '\0' < "$WORK/epdc_PENG060D.fw" | wc -c)" -gt 0 ]; then
+		FW="$WORK/epdc_PENG060D.fw"
+	else
+		rm -f "$WORK/epdc_PENG060D.fw"
+		warn "nothing but zeros at sector $EPDC_SECTOR of $BASE_IMAGE"
+	fi
+fi
 [ -n "$FW" ] || die "no EPDC waveform (epdc_PENG060D.fw) found.
     The kernel config builds it in, and it is Netronix/E-Ink data this
     repository cannot ship. A pristine Tolino android_root does not contain
@@ -47,7 +68,7 @@ done
     /lib/firmware/imx/epdc/epdc_PENG060D.fw out of it, then either drop it in
     \$VENDOR_ROOT/lib/firmware/imx/epdc/ or point BUILD_EPDC_FW at it."
 cp "$FW" "$K/firmware/imx/epdc/epdc_PENG060D.fw"
-info "waveform from $FW"
+info "waveform from $FW (md5 $(md5sum < "$FW" | cut -d' ' -f1))"
 
 cd "$K"
 # The Kobo GPL tarball ships defconfigs (imx_v7_kobo_defconfig and friends)
@@ -62,7 +83,13 @@ if [ ! -f .config ] || [ "$ROOT/patches/kernel/config" -nt .config ]; then
 	info "installed patches/kernel/config"
 fi
 
-if [ ! -f arch/arm/boot/zImage ] || [ "${BUILD_FORCE_KERNEL:-0}" = 1 ]; then
+# Rebuild when the config is newer than the image, not just when the image is
+# missing. Keeping a stale zImage while `make modules` picks up a changed
+# .config gives you a kernel and modules built from different configurations,
+# and CONFIG_MODVERSIONS then makes insmod reject the modules at boot -- the
+# same silent failure that once cost us WiFi and the adb gadget.
+if [ ! -f arch/arm/boot/zImage ] || [ .config -nt arch/arm/boot/zImage ] ||
+		[ "${BUILD_FORCE_KERNEL:-0}" = 1 ]; then
 	info "building zImage (this takes a while)"
 	make ARCH=arm CROSS_COMPILE="$CROSS" HOSTCFLAGS=-fcommon -j"$(nproc)" zImage \
 		>"$WORK/kernel-build.log" 2>&1 || die "kernel build failed, see $WORK/kernel-build.log"
